@@ -58,16 +58,58 @@ What's intentionally NOT in v0.2:
 - Voice (ElevenLabs custom-LLM endpoint is v0.4)
 - Agents subsystem (v0.5)
 
-## v0.3 — vault sources (Drive, Gmail, Telegram, WhatsApp)
+## v0.3a (current) — Google Drive vault
 
-- [ ] **Google OAuth + Drive/Gmail sync** — `/members/connect/google/*`
-  routes, OAuth callback, encrypted refresh token storage, background
-  sync worker. The members_connect_html page is shipped already; need
-  the OAuth flow + sync worker.
-- [ ] **Background sync worker** — `start_background_sync_worker()` +
-  the `sync_drive_connection`, `sync_gmail_connection`,
-  `sync_gmail_delta` workers from lead_server. Largest single
-  extraction — ~880 lines.
+Shipped:
+
+- ✅ **Google OAuth core** (`server/google_oauth.py`) — state CSRF,
+  authorize URL builder, code exchange, refresh token, userinfo, revoke.
+  Wired to the `cfg()` config table so credentials live in MySQL, not env.
+- ✅ **OAuth connection storage** (`server/oauth_db.py`) — Fernet-encrypted
+  refresh + access tokens at rest (`GLOBUS_OAUTH_ENCRYPTION_KEY` config),
+  per-member CRUD, `get_valid_access_token()` with auto-refresh +
+  needs_reconnect flagging on `invalid_grant`.
+- ✅ **Drive API + extractors** (`server/google_drive.py`) — paginated
+  list/export/download, mime classification (Docs→md, Sheets→XLSX,
+  Slides→txt, plain text passthrough), full XLSX flattener that
+  preserves every tab (Drive's CSV export drops everything past sheet 1),
+  per-member-isolated disk cache at `RAW_DATA_DIR/{email}/{account}/...`.
+- ✅ **Sync orchestrator + bg worker** (`server/sync_drive.py`) —
+  5-pass sync (discover, classify, parallel-download 24-worker pool,
+  index, aggregate), connection dispatcher, daemon background loop
+  with stale-`running` reclaim on service start (per Sumit's prod
+  gotcha — a mid-sync restart froze the CRM connector for 5 days
+  before we noticed it).
+- ✅ **Routes** wired into `globus_server.py`: GET `/members/connect`,
+  GET `/members/connect/google/start?drive=1`, GET
+  `/members/connect/google/callback`, POST
+  `/members/connect/google/sync`, POST
+  `/members/connect/google/disconnect`.
+- ✅ **On-demand `read_file`** — when an indexed Drive file has no
+  cached extract yet, the orchestrator downloads + extracts + caches
+  on the fly so chat never has to wait for the full sync to complete.
+- ✅ **Schema additions** — `globus_oauth_states.state_token` +
+  `expires_at` + `redirect_after`, `globus_oauth_connections.user_info` +
+  `drive_folder_ids` + `gmail_query`, `globus_vault_files.skip_reason` +
+  `updated_at` + UNIQUE KEY on (email, source_type, external_id),
+  new `globus_sync_runs` history table.
+
+## v0.3b — Gmail vault
+
+- [ ] **Gmail API + extractors** — paginated message list + multipart
+  body extractor (`gmail_extract_body_text`). ~80 lines.
+- [ ] **Gmail sync workers** — `sync_gmail_connection` (full crawl,
+  50K message ceiling) + `sync_gmail_delta` (newer_than:1d
+  cheap-refresh) + `globus_freshen_gmail` (on-demand pre-tool-call
+  freshen). ~210 lines.
+- [ ] **Promote `list_recent_emails` tool** — currently in
+  `_V03_TOOLS` not-registered set; once Gmail sync exists, register
+  it in the LLM tool schema.
+- [ ] **Connect-flow checkbox** — accept `?gmail=1` on the OAuth start
+  route; teach `sync_connection` dispatcher to fan out to Gmail.
+
+## v0.3c — Telegram / WhatsApp / Teams bridges
+
 - [ ] **Telegram bridge** — Telethon daemon + `globus_telegram_messages`
   ingest. Existing reference at
   https://github.com/Build-With-Sumit/telegram-bridge.

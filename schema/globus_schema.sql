@@ -100,9 +100,13 @@ CREATE TABLE IF NOT EXISTS globus_vault_files (
   extracted_path      VARCHAR(1024),
   extracted_chars     INT,
   extracted           TINYINT(1) NOT NULL DEFAULT 0,
+  skip_reason         VARCHAR(255),
   vault_processed_at  TIMESTAMP NULL,
   metadata            JSON,
   created_at          TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at          TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                      ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uniq_email_source_external (email, source_type, external_id),
   KEY ix_email_source (email, source_type),
   KEY ix_email_filename (email, filename(120)),
   KEY ix_email_extracted (email, extracted, vault_processed_at)
@@ -159,6 +163,9 @@ CREATE TABLE IF NOT EXISTS globus_oauth_connections (
   access_token_enc    BLOB,
   refresh_token_enc   BLOB,
   expires_at          TIMESTAMP NULL,
+  user_info           JSON,
+  drive_folder_ids    TEXT,
+  gmail_query         VARCHAR(255),
   sync_status         ENUM('idle','running','error','disabled')
                       NOT NULL DEFAULT 'idle',
   last_synced_at      TIMESTAMP NULL,
@@ -177,11 +184,31 @@ CREATE TABLE IF NOT EXISTS globus_oauth_connections (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS globus_oauth_states (
-  state           VARCHAR(64) PRIMARY KEY,
+  state_token     VARCHAR(64) PRIMARY KEY,
   email           VARCHAR(320) NOT NULL,
   provider        VARCHAR(40) NOT NULL,
   source_types    VARCHAR(255),
-  created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+  redirect_after  VARCHAR(1024),
+  expires_at      TIMESTAMP NOT NULL,
+  created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  KEY ix_expires (expires_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- One row per sync run (kept for the connect dashboard's "recent runs" widget).
+-- Truncate periodically if it grows unbounded; no FK so deletes cascade is manual.
+CREATE TABLE IF NOT EXISTS globus_sync_runs (
+  id              BIGINT AUTO_INCREMENT PRIMARY KEY,
+  connection_id   BIGINT NOT NULL,
+  email           VARCHAR(320) NOT NULL,
+  source_type     VARCHAR(80) NOT NULL,
+  status          ENUM('success','error') NOT NULL,
+  items_count     INT,
+  chars_written   BIGINT,
+  error_message   TEXT,
+  started_at      TIMESTAMP NULL,
+  finished_at     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  KEY ix_conn_finished (connection_id, finished_at),
+  KEY ix_email_finished (email, finished_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- API-key connections (Freshsales etc.)

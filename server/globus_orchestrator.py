@@ -219,18 +219,75 @@ def delete_member_preference(email, rule_id):
 
 
 # ─────────────────────────────────────────────────────────────────────
-# globus_read_file — disk-cache only (no live Drive fetch in v0.2)
+# globus_read_file — disk-cache first, on-demand Drive download as fallback
 # ─────────────────────────────────────────────────────────────────────
+
+def _drive_fallback_fetch(email, f, max_chars):
+    """Try to download + extract a Drive file that's indexed but has no
+    extracted_path yet. Caches the result on disk + updates the index so
+    subsequent reads are cheap. Returns the same dict shape as the disk-
+    cache path, or None if any precondition fails (caller falls through)."""
+    if f.get("source_type") != "google-drive":
+        return None
+    if not f.get("external_id") or not f.get("connection_id"):
+        return None
+    try:
+        from oauth_db import get_oauth_connection, get_valid_access_token
+        from google_drive import (
+            drive_extract_one, write_extracted_file, vault_files_upsert,
+        )
+    except Exception:
+        return None
+    conn = get_oauth_connection(email, f["connection_id"])
+    if not conn:
+        return None
+    try:
+        access = get_valid_access_token(conn)
+    except Exception:
+        return None
+    drive_meta = {
+        "id": f["external_id"],
+        "name": f.get("filename") or "(untitled)",
+        "mimeType": f.get("mime_type") or "",
+    }
+    text, ext_or_reason = drive_extract_one(access, drive_meta)
+    if not text:
+        return None
+    try:
+        path, n_bytes = write_extracted_file(
+            email, conn["provider_account"], "google-drive",
+            f["external_id"], ext_or_reason or "txt", text)
+        vault_files_upsert(
+            email=email, connection_id=f["connection_id"],
+            provider_account=conn["provider_account"],
+            source_type="google-drive", external_id=f["external_id"],
+            filename=f.get("filename"), mime_type=f.get("mime_type"),
+            size_bytes=n_bytes, modified_at=f.get("modified_at"),
+            extracted_path=path, extracted_chars=len(text))
+    except OSError:
+        pass  # disk cache failed — still serve the text from memory
+    return {
+        "file_id":     f["id"],
+        "filename":    f.get("filename"),
+        "mime_type":   f.get("mime_type"),
+        "modified_at": str(f["modified_at"]) if f.get("modified_at") else None,
+        "content":     text[:max_chars],
+        "truncated":   len(text) > max_chars,
+        "source":      "drive_live",
+    }
+
 
 def globus_read_file(email, file_id, max_chars=GLOBUS_READ_FILE_MAX_CHARS):
     """Return the text of an indexed vault file. Per-member ownership
     check is mandatory — refuses files belonging to another member.
 
-    v0.2 limitation: disk-cache only. The reference impl falls back to
-    a live Drive download for indexed-but-not-yet-extracted Drive files.
-    That's deferred to v0.3 (needs the Drive download helpers ported).
-    For Obsidian-zip uploads (the v0.2 happy path) every file gets a
-    disk path on upload, so this works end-to-end."""
+    Lookup order:
+      1. Disk cache (`extracted_path` set and file exists).
+      2. Live Drive download — only for `google-drive` source_type with a
+         valid OAuth connection; caches to disk + updates the index.
+
+    For Obsidian-zip uploads every file gets a disk path on upload, so
+    step 1 always hits."""
     if not email or not file_id:
         return {"error": "email and file_id required"}
     try:
@@ -239,7 +296,7 @@ def globus_read_file(email, file_id, max_chars=GLOBUS_READ_FILE_MAX_CHARS):
         return {"error": "file_id must be an integer"}
     rows = db_read(
         "SELECT id, email, source_type, filename, mime_type, "
-        "       extracted_path, modified_at "
+        "       extracted_path, modified_at, external_id, connection_id "
         "FROM globus_vault_files WHERE id=%s AND email=%s",
         (fid, email))
     if not rows:
@@ -261,8 +318,11 @@ def globus_read_file(email, file_id, max_chars=GLOBUS_READ_FILE_MAX_CHARS):
             "truncated":   len(content) > max_chars,
             "source":      "disk_cache",
         }
+    live = _drive_fallback_fetch(email, f, max_chars)
+    if live:
+        return live
     return {"error": f"file has no extracted content yet (source_type="
-                     f"{f['source_type']!r}; live fetch is v0.3 work)"}
+                     f"{f['source_type']!r})"}
 
 
 # ─────────────────────────────────────────────────────────────────────

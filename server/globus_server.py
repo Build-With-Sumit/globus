@@ -16,8 +16,9 @@ import json
 import os
 import sys
 import base64
+from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, quote
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -98,11 +99,18 @@ members_auth_html.configure(site=SITE)
 import globus_auth  # noqa: E402
 globus_auth.configure(session_secret=SESSION_SECRET)
 
+# Google OAuth (Drive sync) — only relevant if GOOGLE_OAUTH_CLIENT_ID/SECRET
+# are set in the config table. configure() always runs; the helpers raise a
+# friendly RuntimeError if a client tries to start the flow without keys.
+import google_oauth  # noqa: E402
+google_oauth.configure(site=SITE)
+
 # Page builders + orchestrator import from above; no configure needed.
 from public_globus_html import public_globus_landing_html  # noqa: E402
 from globus_setup_html import globus_setup_html  # noqa: E402
 from globus_chat_html import globus_chat_html  # noqa: E402
 from vault_progress_html import vault_progress_html  # noqa: E402
+from members_connect_html import members_connect_html  # noqa: E402
 from html_chrome import _page, _members_shell, esc  # noqa: E402
 from globus_vault_db import (  # noqa: E402
     globus_get_vault, globus_extract_md_from_zip,
@@ -117,9 +125,26 @@ from globus_auth import (  # noqa: E402
     request_code, verify_code, parse_session_cookie,
 )
 from auth_cookies import make_cookie, CLEAR_COOKIE  # noqa: E402
+from google_oauth import (  # noqa: E402
+    create_oauth_state, consume_oauth_state,
+    google_authorize_url, google_exchange_code, google_userinfo,
+    google_revoke,
+)
+from oauth_db import (  # noqa: E402
+    list_oauth_connections, list_oauth_connections_with_stats,
+    count_oauth_connections, get_oauth_connection,
+    upsert_oauth_connection, delete_oauth_connection, decrypt_token,
+)
+from sync_drive import (  # noqa: E402
+    sync_connection_async, start_background_sync_worker,
+)
 
 
 EMAIL_RE = __import__("re").compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+# How many Google accounts a member can connect.
+GLOBUS_MAX_CONNECTIONS_PER_MEMBER = int(
+    os.environ.get("GLOBUS_MAX_CONNECTIONS_PER_MEMBER", "5"))
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -188,6 +213,11 @@ def _members_landing(email):
         '      <span class="tc-icon">📂</span> Setup</div></div>'
         '    <p class="tc-desc">Upload an Obsidian vault or paste '
         '    markdown.</p><div class="tc-foot">Manage &rarr;</div></a>'
+        '  <a class="tool-card" href="/members/connect">'
+        '    <div class="tc-head"><div class="tc-title">'
+        '      <span class="tc-icon">🔗</span> Connect data</div></div>'
+        '    <p class="tc-desc">Sync Google Drive into your vault.</p>'
+        '    <div class="tc-foot">Connect &rarr;</div></a>'
         '  <a class="tool-card" href="/members/vault-progress">'
         '    <div class="tc-head"><div class="tc-title">'
         '      <span class="tc-icon">📊</span> Vault progress</div></div>'
@@ -204,7 +234,7 @@ def _members_landing(email):
 # ─────────────────────────────────────────────────────────────────────
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "globus/0.2"
+    server_version = "globus/0.3"
 
     def log_message(self, fmt, *args):
         return
@@ -271,7 +301,7 @@ class Handler(BaseHTTPRequestHandler):
 
         if route == "/api/health":
             return self._send_json(200,
-                                    {"ok": True, "app": "globus", "v": "0.2"})
+                                    {"ok": True, "app": "globus", "v": "0.3"})
 
         # Static assets
         if route in ("/favicon.svg", "/styles.css", "/main.js"):
@@ -322,6 +352,115 @@ class Handler(BaseHTTPRequestHandler):
 
         if route == "/members/globus/setup":
             return self._send_html(200, globus_setup_html(email))
+
+        if route == "/members/connect":
+            qs = parse_qs(parsed.query)
+            msg = (qs.get("msg") or [""])[0]
+            kind = (qs.get("kind") or [""])[0]
+            connections = list_oauth_connections_with_stats(email)
+            return self._send_html(200, members_connect_html(
+                email, connections, GLOBUS_MAX_CONNECTIONS_PER_MEMBER,
+                message=msg or None,
+                message_kind=("error" if kind == "error" else "ok")))
+
+        if route == "/members/connect/google/start":
+            if count_oauth_connections(email) >= GLOBUS_MAX_CONNECTIONS_PER_MEMBER:
+                return self._redirect(
+                    "/members/connect?kind=error&msg="
+                    + quote(f"Maximum of {GLOBUS_MAX_CONNECTIONS_PER_MEMBER} "
+                            "Google accounts reached."))
+            qs = parse_qs(parsed.query)
+            sources = []
+            if (qs.get("drive") or [""])[0]:
+                sources.append("drive")
+            # gmail/analytics arrive in v0.3b/c; reject here so users get
+            # a clear error rather than a sync that silently no-ops.
+            if not sources:
+                return self._redirect(
+                    "/members/connect?kind=error&msg="
+                    + quote("Pick at least one source (Drive)."))
+            try:
+                state = create_oauth_state(email, "google", ",".join(sources))
+                url = google_authorize_url(state, sources)
+            except RuntimeError as e:
+                return self._redirect(
+                    "/members/connect?kind=error&msg=" + quote(str(e)))
+            return self._redirect(url)
+
+        if route == "/members/connect/google/callback":
+            qs = parse_qs(parsed.query)
+            state = (qs.get("state") or [""])[0]
+            code = (qs.get("code") or [""])[0]
+            err = (qs.get("error") or [""])[0]
+            if err:
+                return self._redirect(
+                    "/members/connect?kind=error&msg="
+                    + quote(f"Google returned: {err}"))
+            if not (state and code):
+                return self._redirect(
+                    "/members/connect?kind=error&msg="
+                    + quote("Missing state or code from Google."))
+            st = consume_oauth_state(state)
+            if not st:
+                return self._redirect(
+                    "/members/connect?kind=error&msg="
+                    + quote("OAuth state expired or invalid — try again."))
+            owner_email = st["email"]
+            if owner_email != email:
+                return self._redirect(
+                    "/members/connect?kind=error&msg="
+                    + quote("Session/member mismatch — please retry."))
+            try:
+                tokens = google_exchange_code(code)
+            except Exception as e:
+                return self._redirect(
+                    "/members/connect?kind=error&msg="
+                    + quote(f"Token exchange failed: {type(e).__name__}"))
+            refresh = tokens.get("refresh_token")
+            access = tokens.get("access_token")
+            scopes_str = tokens.get("scope", "")
+            expires_in = int(tokens.get("expires_in", 3600))
+            expires_at = datetime.utcnow() + timedelta(seconds=expires_in)
+            if not (refresh and access):
+                return self._redirect(
+                    "/members/connect?kind=error&msg="
+                    + quote("Google did not return a refresh token — try again."))
+            try:
+                info = google_userinfo(access)
+            except Exception:
+                info = {}
+            account = (info.get("email") or "").lower()
+            if not account:
+                return self._redirect(
+                    "/members/connect?kind=error&msg="
+                    + quote("Could not read Google account email."))
+            # Re-check cap with the now-known account (upserts of an existing
+            # one don't grow the count).
+            existing_accounts = {c["provider_account"]
+                                 for c in list_oauth_connections(email)}
+            if (account not in existing_accounts
+                    and len(existing_accounts) >= GLOBUS_MAX_CONNECTIONS_PER_MEMBER):
+                google_revoke(refresh)
+                return self._redirect(
+                    "/members/connect?kind=error&msg="
+                    + quote(f"Maximum of {GLOBUS_MAX_CONNECTIONS_PER_MEMBER} "
+                            "accounts reached."))
+            upsert_oauth_connection(
+                email=email,
+                provider_account=account,
+                scopes=scopes_str,
+                refresh_token=refresh,
+                access_token=access,
+                expires_at=expires_at,
+                user_info=info,
+                source_types=st["source_types"])
+            for c in list_oauth_connections(email):
+                if c["provider_account"] == account:
+                    sync_connection_async(c["id"], email)
+                    break
+            return self._redirect(
+                "/members/connect?kind=ok&msg="
+                + quote(f"Connected {account}. First sync started in the background."))
 
         if route == "/members/vault-progress":
             return self._send_html(200, vault_progress_html(email))
@@ -437,6 +576,49 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_json(500,
                         {"error": f"{type(e).__name__}: {e}"})
 
+        if route == "/members/connect/google/sync":
+            form = self._form()
+            try:
+                conn_id = int((form.get("conn_id") or "0"))
+            except (TypeError, ValueError):
+                conn_id = 0
+            conn = get_oauth_connection(email, conn_id) if conn_id else None
+            if not conn:
+                return self._redirect(
+                    "/members/connect?kind=error&msg="
+                    + quote("Unknown connection."))
+            sync_connection_async(conn_id, email)
+            return self._redirect(
+                "/members/connect?kind=ok&msg="
+                + quote(f"Sync started for {conn['provider_account']}."))
+
+        if route == "/members/connect/google/disconnect":
+            form = self._form()
+            try:
+                conn_id = int((form.get("conn_id") or "0"))
+            except (TypeError, ValueError):
+                conn_id = 0
+            conn = get_oauth_connection(email, conn_id) if conn_id else None
+            if not conn:
+                return self._redirect(
+                    "/members/connect?kind=error&msg="
+                    + quote("Unknown connection."))
+            try:
+                refresh = decrypt_token(conn["refresh_token_enc"])
+                google_revoke(refresh)
+            except Exception:
+                pass
+            from db_helpers import db_write
+            db_write(
+                "DELETE FROM globus_vault_sources WHERE email=%s "
+                "AND source_type IN ('google-drive','gmail') "
+                "AND source_identifier=%s",
+                (email, conn["provider_account"]))
+            delete_oauth_connection(email, conn_id)
+            return self._redirect(
+                "/members/connect?kind=ok&msg="
+                + quote(f"Disconnected {conn['provider_account']}."))
+
         if route == "/api/globus/client-error":
             return self._send(204, b"")
 
@@ -444,12 +626,21 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    print(f"globus/0.2 booting on {HOST}:{PORT}", flush=True)
+    print(f"globus/0.3 booting on {HOST}:{PORT}", flush=True)
     print(f"  site:     {SITE}", flush=True)
     print(f"  db:       {DB_CFG['user']}@{DB_CFG['host']}:{DB_CFG['port']}/"
           f"{DB_CFG['database']}", flush=True)
     print(f"  llm:      {cfg('GLOBUS_LLM_PROVIDER', 'claude-oauth')}",
           flush=True)
+    # Start the background sync worker only if OAuth is wired (otherwise it
+    # would loop forever doing nothing). Safe to enable later — bouncing the
+    # service after setting GOOGLE_OAUTH_CLIENT_ID in config kicks it on.
+    if cfg("GOOGLE_OAUTH_CLIENT_ID"):
+        start_background_sync_worker()
+        print("  bg-sync:  enabled (Google OAuth configured)", flush=True)
+    else:
+        print("  bg-sync:  disabled (set GOOGLE_OAUTH_CLIENT_ID + SECRET "
+              "to enable Drive sync)", flush=True)
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     try:
         server.serve_forever()

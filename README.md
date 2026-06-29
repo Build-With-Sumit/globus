@@ -134,11 +134,12 @@ Globus is opinionated. Bring your own:
 
 ## Status
 
-- **v0.2 (current)** — text chat works end-to-end on a fresh install:
-  sign in via email OTP, upload an Obsidian zip, ask anything over
-  your notes. Citations + per-member daily cap + injection detection
-  shipped. See [ROADMAP.md](ROADMAP.md) for what's intentionally not
-  in v0.2 (Drive/Gmail = v0.3, voice = v0.4, agents = v0.5).
+- **v0.3a (current)** — full text-chat install path works on a fresh box:
+  sign in via OTP, *either* upload an Obsidian zip *or* connect Google
+  Drive (Fernet-encrypted refresh tokens, parallel sync, per-tab XLSX
+  flattening, on-demand `read_file` for un-cached files), chat with
+  citations. See [ROADMAP.md](ROADMAP.md) for v0.3b (Gmail),
+  v0.3c (Telegram/WhatsApp/Teams), v0.4 (voice), v0.5 (agents).
 - **Alpha** — works in production at buildwithsumit.com but every
   install will need hands-on setup. No managed-installer yet.
 - **Roadmap** is in [ROADMAP.md](ROADMAP.md). Voice cost/latency rebuild

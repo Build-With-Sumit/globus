@@ -1,9 +1,10 @@
 # Installing Globus
 
 > **Status: alpha.** The reference implementation runs in production at
-> buildwithsumit.com. This guide gets v0.1 (public landing + the
-> module skeleton) running on your box. The full chat + voice + agents
-> path is v0.2 — see [ROADMAP.md](ROADMAP.md).
+> buildwithsumit.com. This guide gets v0.3a running on your box — that's
+> sign-in via OTP, vault from Obsidian zip or Google Drive, working
+> text chat. Voice + Gmail + WhatsApp/Telegram are later phases — see
+> [ROADMAP.md](ROADMAP.md).
 
 ## What you'll need
 
@@ -61,10 +62,38 @@ Fill in **at minimum**:
 - `SESSION_SECRET` — generate with `python3 -c 'import secrets; print(secrets.token_hex(32))'`
 - `SITE` — the public URL where Globus will be served (e.g. `https://globus.example.com`)
 
-For OAuth providers + ElevenLabs, see their dedicated docs:
-- [`docs/google-oauth-setup.md`](docs/google-oauth-setup.md) — Drive + Gmail + Analytics
-- [`docs/microsoft-oauth-setup.md`](docs/microsoft-oauth-setup.md) — Teams via Graph
-- [`docs/voice-setup.md`](docs/voice-setup.md) — ElevenLabs Conversational AI
+### Google OAuth (optional — needed for Drive sync)
+
+Drive sync is opt-in. To enable, create an OAuth client in
+[Google Cloud Console](https://console.cloud.google.com/apis/credentials):
+
+1. Make a new project (or reuse one).
+2. Enable the **Google Drive API** (APIs & Services → Library).
+3. OAuth consent screen → External → add `drive.readonly`, `userinfo.email`,
+   `userinfo.profile`, `openid` scopes.
+4. Credentials → Create OAuth client ID → Web application. Add
+   `https://<your-site>/members/connect/google/callback` as an authorised
+   redirect URI.
+5. Generate a Fernet key for at-rest token encryption:
+   ```bash
+   python3 -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'
+   ```
+6. Insert all three into the `config` table:
+   ```sql
+   INSERT INTO config (name, value) VALUES
+     ('GOOGLE_OAUTH_CLIENT_ID',     '<client-id>.apps.googleusercontent.com'),
+     ('GOOGLE_OAUTH_CLIENT_SECRET', '<client-secret>'),
+     ('GLOBUS_OAUTH_ENCRYPTION_KEY','<fernet-key>');
+   ```
+7. Restart `globus.service`. Boot log should now say
+   `bg-sync: enabled (Google OAuth configured)`.
+
+Members can then connect a Google account at `/members/connect`. The
+first sync fires immediately in the background; subsequent syncs run
+hourly when the connection is older than 1h.
+
+For other providers (Microsoft Teams, ElevenLabs voice), see their
+dedicated docs — those land in v0.3b+ ([ROADMAP.md](ROADMAP.md)).
 
 ## 4. Pick your LLM
 
@@ -117,10 +146,11 @@ one specific team. Define your own.
 
 ```bash
 python3 server/globus_server.py
-# globus/0.1 booting on 127.0.0.1:8090
+# globus/0.3 booting on 127.0.0.1:8090
 #   site:     https://globus.example.com
 #   db:       globus@127.0.0.1:3306/globus
 #   llm:      claude-oauth
+#   bg-sync:  disabled (set GOOGLE_OAUTH_CLIENT_ID + SECRET to enable Drive sync)
 ```
 
 Open <http://127.0.0.1:8090/globus> — you should see the public
@@ -176,8 +206,10 @@ sender by editing `server/members_auth_html.py`).
 | `pymysql.err.OperationalError 2003` | MySQL not reachable. Check `DB_HOST` / `DB_PORT`. |
 | `pymysql.err.OperationalError 1045` | Wrong DB password. |
 | Login OTP email never arrives | `EMAIL_API_KEY` missing or wrong. The dev path logs codes to stderr. |
-| Public `/globus` works but `/members/*` shows "v0.1 skeleton" | Expected — those routes are v0.2. See [ROADMAP.md](ROADMAP.md). |
 | Cryptography ImportError | `pip install cryptography>=42.0` (some old prebuilt wheels are missing Fernet) |
+| Drive sync silently does nothing | Check the boot banner — `bg-sync: disabled` means `GOOGLE_OAUTH_CLIENT_ID` isn't set. Inserting it into `config` requires a service restart (cfg is cached at boot). |
+| OAuth flow fails with "GLOBUS_OAUTH_ENCRYPTION_KEY not configured" | Generate a Fernet key and add to `config` table. See [§ Google OAuth](#3-bootstrap-config) above. |
+| Drive sync silently stalls mid-run after a restart | Should auto-recover — the worker resets stale `running` rows on boot. If not, manually run `UPDATE globus_oauth_connections SET sync_status='idle' WHERE sync_status='running';` then restart. |
 
 ## Upgrading
 
