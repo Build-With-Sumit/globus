@@ -220,14 +220,22 @@ def sync_connection(conn_id, email):
     total_items = 0
     total_chars = 0
     errors = []
+    # Sync fast/high-value sources first so chat is useful within seconds.
+    sources.sort(key=lambda s: {"gmail": 1, "drive": 2}.get(s, 9))
     for s in sources:
         started = datetime.utcnow()
         try:
             if s == "drive":
                 items, chars = sync_drive_connection(conn)
                 source_type = "google-drive"
+            elif s == "gmail":
+                # Lazy import — sync_gmail pulls in sync_gmail.py which
+                # imports from this module too. Keep the cycle short.
+                from sync_gmail import sync_gmail_connection
+                items, chars = sync_gmail_connection(conn)
+                source_type = "gmail"
             else:
-                # v0.3a is Drive-only. Gmail / Analytics arrive in v0.3b.
+                # Analytics + future sources land in later phases.
                 continue
             total_items += items
             total_chars += chars
@@ -244,7 +252,7 @@ def sync_connection(conn_id, email):
                 "status, error_message, started_at, finished_at) "
                 "VALUES (%s, %s, %s, 'error', %s, %s, NOW())",
                 (conn_id, email,
-                 {"drive": "google-drive"}.get(s, s),
+                 {"drive": "google-drive", "gmail": "gmail"}.get(s, s),
                  err, started))
     if errors:
         update_oauth_sync_status(conn_id, 'error', "; ".join(errors))

@@ -1,9 +1,10 @@
 # Installing Globus
 
 > **Status: alpha.** The reference implementation runs in production at
-> buildwithsumit.com. This guide gets v0.3a running on your box — that's
-> sign-in via OTP, vault from Obsidian zip or Google Drive, working
-> text chat. Voice + Gmail + WhatsApp/Telegram are later phases — see
+> buildwithsumit.com. This guide gets v0.3b running on your box — that's
+> sign-in via OTP, vault from any combination of Obsidian zip + Google
+> Drive + Gmail, working text chat (with `list_recent_emails` for inbox
+> queries). Voice + WhatsApp/Telegram/Teams are later phases — see
 > [ROADMAP.md](ROADMAP.md).
 
 ## What you'll need
@@ -62,14 +63,16 @@ Fill in **at minimum**:
 - `SESSION_SECRET` — generate with `python3 -c 'import secrets; print(secrets.token_hex(32))'`
 - `SITE` — the public URL where Globus will be served (e.g. `https://globus.example.com`)
 
-### Google OAuth (optional — needed for Drive sync)
+### Google OAuth (optional — needed for Drive + Gmail sync)
 
-Drive sync is opt-in. To enable, create an OAuth client in
+Drive and Gmail sync are opt-in. To enable, create an OAuth client in
 [Google Cloud Console](https://console.cloud.google.com/apis/credentials):
 
 1. Make a new project (or reuse one).
-2. Enable the **Google Drive API** (APIs & Services → Library).
-3. OAuth consent screen → External → add `drive.readonly`, `userinfo.email`,
+2. Enable the **Google Drive API** and **Gmail API** (APIs & Services →
+   Library) — enable just Drive if you only want Drive sync.
+3. OAuth consent screen → External → add `drive.readonly`,
+   `gmail.readonly` (skip if Drive-only), `userinfo.email`,
    `userinfo.profile`, `openid` scopes.
 4. Credentials → Create OAuth client ID → Web application. Add
    `https://<your-site>/members/connect/google/callback` as an authorised

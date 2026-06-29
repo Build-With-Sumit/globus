@@ -94,19 +94,40 @@ Shipped:
   `updated_at` + UNIQUE KEY on (email, source_type, external_id),
   new `globus_sync_runs` history table.
 
-## v0.3b — Gmail vault
+## v0.3b (current) — Gmail vault
 
-- [ ] **Gmail API + extractors** — paginated message list + multipart
-  body extractor (`gmail_extract_body_text`). ~80 lines.
-- [ ] **Gmail sync workers** — `sync_gmail_connection` (full crawl,
-  50K message ceiling) + `sync_gmail_delta` (newer_than:1d
-  cheap-refresh) + `globus_freshen_gmail` (on-demand pre-tool-call
-  freshen). ~210 lines.
-- [ ] **Promote `list_recent_emails` tool** — currently in
-  `_V03_TOOLS` not-registered set; once Gmail sync exists, register
-  it in the LLM tool schema.
-- [ ] **Connect-flow checkbox** — accept `?gmail=1` on the OAuth start
-  route; teach `sync_connection` dispatcher to fan out to Gmail.
+Shipped:
+
+- ✅ **Gmail API + body extractor** (`server/google_gmail.py`) — paginated
+  message list (50K message ceiling), per-message GET (`format=full`),
+  recursive text/plain → text/html-with-tag-strip fallback body extractor,
+  RFC-2822 → naive UTC date parser so `modified_at` is a real TIMESTAMP
+  PyMySQL can write.
+- ✅ **Gmail sync workers** (`server/sync_gmail.py`):
+  - `sync_gmail_connection(conn)` — full crawl, default query
+    `newer_than:90d -in:spam -in:trash`, 24-worker parallel pool, per-
+    message disk cache + globus_vault_files index + top-100-recent
+    aggregated row.
+  - `sync_gmail_delta(conn, query, max_wall_sec)` — incremental: lists
+    IDs in window, dedups against vault, fetches only NEW ones with
+    20-second wall-clock cap.
+  - `globus_freshen_gmail(email, background=...)` — per-member
+    cooldown-throttled (1/min) delta sync hook used inline by
+    list_recent_emails; voice path passes `background=True` to avoid
+    blowing ElevenLabs' per-turn budget.
+- ✅ **Dispatcher** — `sync_drive.sync_connection` now fans out to
+  `sync_gmail_connection` for the `gmail` source. Sources sorted
+  fast-first (Gmail before Drive).
+- ✅ **`list_recent_emails` tool** registered in the orchestrator when
+  `sync_gmail` imports cleanly; `_V03_TOOLS` now only holds
+  `send_telegram_via_bot` + `run_agent`. Calls `globus_freshen_gmail`
+  inline so chat answers from fresh inbox state.
+- ✅ **Connect-flow checkbox** — `/members/connect/google/start` accepts
+  `?gmail=1` (alone or combined with `?drive=1`); error message says
+  "Pick at least one source (Drive or Gmail)".
+- ✅ **Bug fix in `_globus_capabilities_block`** — was crashing chat with
+  `TypeError: sequence item 0: expected str instance, NoneType found`
+  when a vault row had `provider_account=NULL`. Now skips those rows.
 
 ## v0.3c — Telegram / WhatsApp / Teams bridges
 

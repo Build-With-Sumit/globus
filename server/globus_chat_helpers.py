@@ -50,10 +50,13 @@ def _globus_capabilities_block(email):
             "GROUP BY source_type, provider_account", (email,)) or []
         for r in rows:
             counts[r["source_type"]] += int(r["n"])
+            pa = r.get("provider_account")
+            if not pa:
+                continue  # legacy rows without provider_account — skip
             if r["source_type"] == "google-drive":
-                accts["drive"].add(r["provider_account"])
+                accts["drive"].add(pa)
             elif r["source_type"] == "gmail":
-                accts["gmail"].add(r["provider_account"])
+                accts["gmail"].add(pa)
         tg_n = (db_read(
             "SELECT COUNT(*) n FROM globus_telegram_messages "
             "WHERE member_email=%s", (email,)) or [{"n": 0}])[0]["n"]

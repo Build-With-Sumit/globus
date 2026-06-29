@@ -373,12 +373,14 @@ class Handler(BaseHTTPRequestHandler):
             sources = []
             if (qs.get("drive") or [""])[0]:
                 sources.append("drive")
-            # gmail/analytics arrive in v0.3b/c; reject here so users get
-            # a clear error rather than a sync that silently no-ops.
+            if (qs.get("gmail") or [""])[0]:
+                sources.append("gmail")
+            # Analytics + Teams land in later phases; reject here so users
+            # get a clear error rather than a sync that silently no-ops.
             if not sources:
                 return self._redirect(
                     "/members/connect?kind=error&msg="
-                    + quote("Pick at least one source (Drive)."))
+                    + quote("Pick at least one source (Drive or Gmail)."))
             try:
                 state = create_oauth_state(email, "google", ",".join(sources))
                 url = google_authorize_url(state, sources)

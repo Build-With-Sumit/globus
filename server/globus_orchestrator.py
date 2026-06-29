@@ -42,6 +42,14 @@ from globus_search import (
     globus_search_files, globus_search_content,
     globus_search_telegram, globus_search_whatsapp,
 )
+# Gmail-backed tool — only registered if the Gmail sync module imports
+# (i.e. v0.3b+ install with cryptography + OAuth wired). Falls back to
+# the _V03_TOOLS not-registered error if the import fails.
+try:
+    from sync_gmail import globus_freshen_gmail
+    _GMAIL_AVAILABLE = True
+except Exception:
+    _GMAIL_AVAILABLE = False
 from globus_chat_helpers import (
     _globus_capabilities_block, _globus_tools_instructions,
     _strip_tool_markup,
@@ -326,6 +334,73 @@ def globus_read_file(email, file_id, max_chars=GLOBUS_READ_FILE_MAX_CHARS):
 
 
 # ─────────────────────────────────────────────────────────────────────
+# globus_list_recent_emails — inbox view backed by gmail vault rows
+# ─────────────────────────────────────────────────────────────────────
+
+def globus_list_recent_emails(email, days_back=7, limit=30,
+                                sender_filter=None, subject_filter=None,
+                                freshen_background=False):
+    """List the member's most recent Gmail messages — the inbox view.
+    Calls globus_freshen_gmail first so the answer comes from fresh
+    data (cooldown-throttled to once/minute/member).
+
+    Filters (all optional): days_back caps the window (1-90); sender_filter
+    matches the From header; subject_filter matches the subject."""
+    if not email or not _GMAIL_AVAILABLE:
+        return []
+    try:
+        globus_freshen_gmail(email, background=freshen_background)
+    except Exception as e:
+        print(f"[gmail-delta] freshen failed (continuing with current data): "
+              f"{type(e).__name__}: {e}", flush=True)
+    try:
+        days_back = max(1, min(int(days_back or 7), 90))
+    except (TypeError, ValueError):
+        days_back = 7
+    try:
+        limit = max(1, min(int(limit or 30), 100))
+    except (TypeError, ValueError):
+        limit = 30
+    sql_parts = [
+        "SELECT id, filename AS subject, modified_at, metadata, "
+        "       extracted_chars "
+        "FROM globus_vault_files "
+        "WHERE email=%s AND source_type='gmail' AND extracted=1 "
+        "  AND modified_at IS NOT NULL "
+        "  AND modified_at >= NOW() - INTERVAL %s DAY "
+    ]
+    params = [email, days_back]
+    if sender_filter:
+        sql_parts.append(
+            "  AND JSON_EXTRACT(metadata, '$.From') LIKE %s ")
+        params.append(f"%{sender_filter}%")
+    if subject_filter:
+        sql_parts.append("  AND filename LIKE %s ")
+        params.append(f"%{subject_filter}%")
+    sql_parts.append("ORDER BY modified_at DESC LIMIT %s")
+    params.append(limit)
+    rows = db_read("".join(sql_parts), tuple(params)) or []
+
+    out = []
+    for r in rows:
+        md = r.get("metadata") or {}
+        if isinstance(md, str):
+            try:
+                md = json.loads(md)
+            except Exception:
+                md = {}
+        out.append({
+            "file_id":    r["id"],
+            "subject":    r["subject"] or "(no subject)",
+            "from":       md.get("From") or "(unknown)",
+            "to":         md.get("To") or "",
+            "date":       str(r["modified_at"]) if r["modified_at"] else None,
+            "char_count": int(r["extracted_chars"] or 0),
+        })
+    return out
+
+
+# ─────────────────────────────────────────────────────────────────────
 # Sanjay resolved-state tool (no-op-safe if Sanjay isn't installed)
 # ─────────────────────────────────────────────────────────────────────
 
@@ -368,7 +443,12 @@ def mark_chat_resolved(email, chat_name_fragment):
 
 # Tools we DON'T register in v0.2 — the LLM will see "unknown tool" if
 # it tries to call them. Wired up in v0.3.
-_V03_TOOLS = {"list_recent_emails", "send_telegram_via_bot", "run_agent"}
+# Tools the schema advertises but the OSS install hasn't wired yet. v0.3b
+# registers list_recent_emails (Gmail vault), so it drops out of this set
+# at runtime when sync_gmail imports cleanly. The rest land in later phases.
+_V03_TOOLS = {"send_telegram_via_bot", "run_agent"}
+if not _GMAIL_AVAILABLE:
+    _V03_TOOLS = _V03_TOOLS | {"list_recent_emails"}
 
 
 def _run_tools_loop(system, msgs, email, max_tokens=2000,
@@ -481,6 +561,14 @@ def _run_tools_loop(system, msgs, email, max_tokens=2000,
                 elif name == "mark_chat_resolved":
                     result = mark_chat_resolved(
                         email, (inp.get("chat_name") or "").strip())
+                    iter_non_search_calls += 1
+                elif name == "list_recent_emails" and _GMAIL_AVAILABLE:
+                    result = globus_list_recent_emails(
+                        email,
+                        days_back=inp.get("days_back", 7),
+                        limit=inp.get("limit", 30),
+                        sender_filter=inp.get("sender_filter"),
+                        subject_filter=inp.get("subject_filter"))
                     iter_non_search_calls += 1
                 elif name in _V03_TOOLS:
                     result = {"error": f"tool {name!r} not wired in v0.2 — "
