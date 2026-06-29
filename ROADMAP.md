@@ -138,17 +138,37 @@ Shipped:
   https://github.com/Build-With-Sumit/whatsapp-bridge.
 - [ ] **Microsoft Teams** — Graph API cron, OAuth, `globus_teams_messages`.
 
-## v0.4 — voice
+## v0.4 (current) — voice
 
-- [ ] **ElevenLabs custom-LLM endpoint** — `/api/globus/voice-llm/chat/completions`
-  (OpenAI-shape, SSE streaming). Reference implementation:
-  `_voice_build_context` + `globus_voice_llm_call` + the keepalive
-  thread pattern. ~280 lines.
-- [ ] **Voice token** — short-lived HMAC for `/api/globus/voice-token`.
-  Modules are shipped (`voice_helpers`); needs the route + the chat
-  page wiring.
-- [ ] **Voice setup doc** — `docs/voice-setup.md` (port from
-  buildwithsumit `docs/GLOBUS_VOICE_SETUP.md`).
+Shipped:
+
+- ✅ **ElevenLabs custom-LLM endpoint** — POST
+  `/api/globus/voice-llm/chat/completions`. Accepts OpenAI-shape chat
+  completions requests from EL's cloud, verifies the voice token,
+  drops ASR-noise inputs (Whisper hallucinations like "thanks for
+  watching"), runs through the chat orchestrator (same brain as text
+  chat), returns either JSON or SSE stream. ~150 lines in
+  `server/voice_route.py`.
+- ✅ **Voice token route** — GET `/api/globus/voice-token` (cookie-
+  authed) issues a fresh 6h HMAC token for long-session refresh.
+  The chat page also embeds a token at render time so most loads
+  never need to call this.
+- ✅ **Setup doc** — `docs/voice-setup.md` walks through ElevenLabs
+  agent creation, custom LLM wiring, allowlist + voice token security,
+  and what's intentionally NOT in OSS v0.4 (per-turn keepalive,
+  DeepSeek fallback chain, word-by-word streaming).
+
+What's intentionally NOT in v0.4 OSS:
+- Per-turn keepalive thread (prod emits filler audio during long tool
+  calls so EL doesn't time out). The OSS path relies on tool calls
+  finishing in under EL's per-turn budget (~25s). Keep `read_file`
+  paths fast.
+- True progressive SSE token streaming. OSS sends the full reply as
+  one chunk + a finish chunk; EL starts TTS as soon as it arrives.
+  Replace `voice_llm_sse_chunks()` if you need word-by-word.
+- DeepSeek-V3 fallback chain. The chat orchestrator already handles
+  provider switching via `GLOBUS_LLM_PROVIDER` — no separate voice
+  routing needed.
 
 ## v0.5 — agents
 

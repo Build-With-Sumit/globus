@@ -134,12 +134,13 @@ Globus is opinionated. Bring your own:
 
 ## Status
 
-- **v0.3b (current)** — full text-chat install path works on a fresh box:
-  sign in via OTP, *any combination of* Obsidian zip / Google Drive /
-  Gmail, chat with citations. Gmail tools (`list_recent_emails`) include
-  an on-demand delta freshen so chat answers from up-to-the-minute inbox
-  state. See [ROADMAP.md](ROADMAP.md) for v0.3c (Telegram/WhatsApp/Teams),
-  v0.4 (voice), v0.5 (agents).
+- **v0.4 (current)** — text **and voice** chat work on a fresh install:
+  sign in via OTP, vault from any combo of Obsidian zip / Google Drive /
+  Gmail, chat by typing or by tapping the orb (JARVIS-style ElevenLabs
+  voice over the same brain + same vault). See
+  [`docs/voice-setup.md`](docs/voice-setup.md) for the ElevenLabs
+  agent setup. v0.3c bridges (Telegram/WhatsApp/Teams) and v0.5 agents
+  are still ahead — see [ROADMAP.md](ROADMAP.md).
 - **Alpha** — works in production at buildwithsumit.com but every
   install will need hands-on setup. No managed-installer yet.
 - **Roadmap** is in [ROADMAP.md](ROADMAP.md). Voice cost/latency rebuild

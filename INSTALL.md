@@ -1,10 +1,11 @@
 # Installing Globus
 
 > **Status: alpha.** The reference implementation runs in production at
-> buildwithsumit.com. This guide gets v0.3b running on your box — that's
+> buildwithsumit.com. This guide gets v0.4 running on your box — that's
 > sign-in via OTP, vault from any combination of Obsidian zip + Google
-> Drive + Gmail, working text chat (with `list_recent_emails` for inbox
-> queries). Voice + WhatsApp/Telegram/Teams are later phases — see
+> Drive + Gmail, working text chat **and voice chat** (ElevenLabs orb;
+> see [`docs/voice-setup.md`](docs/voice-setup.md)). WhatsApp/Telegram/
+> Teams bridges and the agents subsystem are later phases — see
 > [ROADMAP.md](ROADMAP.md).
 
 ## What you'll need

@@ -85,6 +85,22 @@ html_chrome.configure(site=SITE, members_dir=MEMBERS_DIR)
 import voice_helpers  # noqa: E402
 voice_helpers.configure(session_secret=SESSION_SECRET)
 
+# voice_providers needs a DeepSeek key getter (lazy — re-reads cfg() on
+# each call) + the default model name shown in OpenAI-shape responses.
+# Both safe to configure even on installs that don't enable voice — the
+# module just sits idle if /api/globus/voice-llm/* is never hit.
+import voice_providers  # noqa: E402
+
+def _voice_default_model():
+    # cfg() is evaluated at boot — voice_providers re-evaluates the
+    # DEEPSEEK_API_KEY getter on every call, but the model name is
+    # captured here. Override with VOICE_DEFAULT_MODEL in config.
+    return cfg("VOICE_DEFAULT_MODEL", "claude-sonnet-4-6")
+
+voice_providers.configure(
+    deepseek_api_key_getter=lambda: (cfg("DEEPSEEK_API_KEY", "") or "").strip(),
+    default_model=_voice_default_model())
+
 import auth_cookies  # noqa: E402
 auth_cookies.configure(session_secret=SESSION_SECRET,
                        session_ttl=int(os.environ.get("SESSION_TTL_SEC",
@@ -137,6 +153,10 @@ from oauth_db import (  # noqa: E402
 )
 from sync_drive import (  # noqa: E402
     sync_connection_async, start_background_sync_worker,
+)
+from voice_helpers import voice_token_make  # noqa: E402
+from voice_route import (  # noqa: E402
+    authenticate_voice_request, voice_chat_handle, voice_chat_format_response,
 )
 
 
@@ -234,7 +254,7 @@ def _members_landing(email):
 # ─────────────────────────────────────────────────────────────────────
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "globus/0.3"
+    server_version = "globus/0.4"
 
     def log_message(self, fmt, *args):
         return
@@ -301,7 +321,7 @@ class Handler(BaseHTTPRequestHandler):
 
         if route == "/api/health":
             return self._send_json(200,
-                                    {"ok": True, "app": "globus", "v": "0.3"})
+                                    {"ok": True, "app": "globus", "v": "0.4"})
 
         # Static assets
         if route in ("/favicon.svg", "/styles.css", "/main.js"):
@@ -480,6 +500,13 @@ class Handler(BaseHTTPRequestHandler):
             return self._send_json(200, {"running": [], "recent_runs": [],
                                           "latest_per_agent": {}})
 
+        if route == "/api/globus/voice-token":
+            # Cookie-authed refresh route — used by the chat page if
+            # the embedded token expires during a long session. The
+            # token is also embedded at render time so most loads
+            # never need this.
+            return self._send_json(200, {"token": voice_token_make(email)})
+
         if route == "/api/globus/client-error":
             return self._send(204, b"")  # accept + drop
 
@@ -515,7 +542,27 @@ class Handler(BaseHTTPRequestHandler):
             return self._redirect("/members/globus",
                                   [("Set-Cookie", make_cookie(email))])
 
-        # ---- Auth-gated POST routes ----
+        # ---- Voice custom-LLM endpoint (voice-token auth, NOT cookie) ----
+        # ElevenLabs hits this from its cloud, so we can't rely on a
+        # session cookie. The voice_token is HMAC-signed and binds the
+        # request to a member (6h TTL — issued at chat page render).
+        if route == "/api/globus/voice-llm/chat/completions":
+            body = self._json()
+            voice_email = authenticate_voice_request(self.headers, body)
+            if not voice_email:
+                return self._send_json(401, {"error": "voice_token invalid "
+                                              "or expired"})
+            try:
+                reply, usage, stream = voice_chat_handle(voice_email, body)
+                data, ctype = voice_chat_format_response(
+                    reply, usage, stream, model_name=cfg(
+                        "VOICE_DEFAULT_MODEL", "claude-sonnet-4-6"))
+                return self._send(200, data, ctype)
+            except Exception as e:
+                return self._send_json(500, {
+                    "error": f"{type(e).__name__}: {e}"})
+
+        # ---- Auth-gated POST routes (cookie) ----
         email = self._member_email()
         if not email:
             return self._send_json(401, {"error": "sign in"})
@@ -628,7 +675,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    print(f"globus/0.3 booting on {HOST}:{PORT}", flush=True)
+    print(f"globus/0.4 booting on {HOST}:{PORT}", flush=True)
     print(f"  site:     {SITE}", flush=True)
     print(f"  db:       {DB_CFG['user']}@{DB_CFG['host']}:{DB_CFG['port']}/"
           f"{DB_CFG['database']}", flush=True)
