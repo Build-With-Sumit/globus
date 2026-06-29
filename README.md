@@ -134,10 +134,15 @@ Globus is opinionated. Bring your own:
 
 ## Status
 
+- **v0.2 (current)** — text chat works end-to-end on a fresh install:
+  sign in via email OTP, upload an Obsidian zip, ask anything over
+  your notes. Citations + per-member daily cap + injection detection
+  shipped. See [ROADMAP.md](ROADMAP.md) for what's intentionally not
+  in v0.2 (Drive/Gmail = v0.3, voice = v0.4, agents = v0.5).
 - **Alpha** — works in production at buildwithsumit.com but every
   install will need hands-on setup. No managed-installer yet.
-- **Roadmap** is in [TODO.md](TODO.md). Voice cost/latency rebuild
-  (ElevenLabs → Cartesia + Deepgram + LiveKit) is the biggest item.
+- **Roadmap** is in [ROADMAP.md](ROADMAP.md). Voice cost/latency rebuild
+  (ElevenLabs → Cartesia + Deepgram + LiveKit) is the biggest v1.0 item.
 
 ## Contributing
 

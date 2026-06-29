@@ -1,6 +1,6 @@
 # Globus roadmap
 
-## v0.1 (current) — repo skeleton + module library
+## v0.1 — repo skeleton + module library
 
 Shipped:
 
@@ -12,43 +12,51 @@ Shipped:
 - ✅ Config templates (`.env.example`, `persona.example.md`).
 - ✅ Generic example agents catalog (`globus_agents_catalog.py` ships
   Research / Sales Desk / Infra Watch — replace with yours).
-- ✅ Minimal `globus_server.py` entrypoint — boots all modules
-  correctly, serves the public `/globus` landing + `/api/health`,
-  returns a friendly "v0.2 coming" placeholder for members routes.
 - ✅ Install docs (`INSTALL.md`) covering MySQL, .env, LLM provider
   choice, systemd unit.
 - ✅ Architecture docs (`ARCHITECTURE.md`) — module map, data flow,
   refactor history.
 
-What you can do today:
-- Install it, see the public landing, exercise the DB schema.
-- Read the source as a reference for building your own AI assistant
-  on the same shape.
-- Fork it and port the v0.2 work below — PRs welcome.
+## v0.2 (current) — fully working text chat
 
-## v0.2 (next) — fully working text chat
+Shipped:
 
-Port the remaining functions out of the buildwithsumit reference
-`lead_server.py` and into this repo. The pieces:
+- ✅ **Chat orchestrator** — `globus_orchestrator.py` ports
+  `_globus_run_tools_loop` + `globus_chat_send` (~430 lines): the
+  tool-use loop, persona loading with priority chain
+  (`config/persona.md` → `persona.example.md` → default), injection
+  detection, daily-cap accounting, forced-synth fallback, empty-search
+  backstop, markup-leak recovery.
+- ✅ **Member auth flow** — `globus_auth.py` ships email-OTP via
+  SendGrid (with stderr fallback for dev), 6-digit codes hashed with
+  HMAC-SHA256, 5/hour rate limit, 10-minute expiry, plus cookie
+  parsing for the `bws_member` session.
+- ✅ **Vault upload endpoint** — `POST /members/globus/upload` handles
+  Obsidian zips (base64) + paste, wired to `globus_extract_md_from_zip`
+  + `globus_upsert_source`.
+- ✅ **Routes** — `globus_server.py` rewritten as a real entrypoint:
+  `/`, `/globus`, `/api/health`, `/members/login` (GET+POST),
+  `/members/login/code` (GET+POST), `/members/logout`, `/members`,
+  `/members/globus`, `/members/globus/setup`,
+  `/members/globus/upload` (POST), `/members/globus/chat` (POST),
+  `/members/vault-progress`, `/api/globus/vault-progress`,
+  `/api/globus/agent-status` (stub), `/api/globus/client-error`.
+- ✅ **Disk-cache `read_file`** — v0.2 reads `extracted_path` files
+  directly; Drive/Gmail downloads are deferred to v0.3.
+- ✅ **`mark_chat_resolved` tool** — silences stale alerts;
+  no-op-safe (returns clear error if `sanjay_alerts` table is absent).
+- ✅ **Explicit `_V03_TOOLS` set** — `list_recent_emails`,
+  `send_telegram_via_bot`, `run_agent` return a clear "not registered
+  in v0.2" error if the LLM calls them.
 
-- [ ] **Chat orchestrator** — `_globus_run_tools_loop` + `globus_chat_send`
-  (~420 lines). The actual tool-use loop the LLM runs.
-- [ ] **Heavier tool implementations** — `globus_read_file` (needs Drive
-  download helpers), `globus_list_recent_emails` (needs gmail-delta
-  sync), `globus_send_telegram_via_bot` (TG bot API + per-bot
-  allow-list checks).
-- [ ] **Member auth flow** — OTP email, Google OAuth login, cookie
-  session lifecycle. Pieces are in place (`members_db`, `auth_cookies`,
-  `members_auth_html`), just need the route handlers in
-  `globus_server.py`.
-- [ ] **Vault upload endpoint** — `/members/globus/upload` (zip + paste).
-  Wires up `globus_extract_md_from_zip` + `globus_save_vault`.
-- [ ] **Routes** — `/members`, `/members/globus`, `/members/globus/setup`,
-  `/members/login`, `/members/login/google/start`, `/members/login/google/callback`.
+After v0.2, a fresh installer can: sign up via OTP, upload an Obsidian
+zip, and have a working text-chat conversation with Globus over their
+own data — no voice, no Drive/Gmail, no WA/TG yet.
 
-After v0.2, a member can sign up, upload an Obsidian zip, and have a
-working text-chat conversation with Globus over their data — no voice
-or external connectors yet.
+What's intentionally NOT in v0.2:
+- Google OAuth login (Drive/Gmail sync is v0.3 — login stays OTP-only)
+- Voice (ElevenLabs custom-LLM endpoint is v0.4)
+- Agents subsystem (v0.5)
 
 ## v0.3 — vault sources (Drive, Gmail, Telegram, WhatsApp)
 
