@@ -1,0 +1,3 @@
+# Globus — runtime dependencies. Minimal on purpose.
+PyMySQL>=1.0
+cryptography>=42.0          # Fernet encryption for OAuth refresh tokens

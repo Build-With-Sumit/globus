@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "globus"
+version = "0.1.0"
+description = "Self-hosted private AI assistant — text + voice + agents over your data (Drive, Gmail, WhatsApp, Telegram, Teams, CRM). Per-member-isolated, Claude/DeepSeek-backed, AGPL-3.0."
+readme = "README.md"
+license = "AGPL-3.0-or-later"
+requires-python = ">=3.10"
+authors = [
+    { name = "Sumit Ghosh", email = "sumit@globussoft.com" },
+]
+keywords = [
+    "ai", "claude", "anthropic", "deepseek", "elevenlabs",
+    "personal-ai", "private-ai", "assistant", "rag", "agents",
+    "self-hosted", "chat", "voice", "telegram", "whatsapp",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Communications :: Chat",
+    "Topic :: Internet :: WWW/HTTP",
+]
+dependencies = [
+    "PyMySQL>=1.0",
+    "cryptography>=42.0",
+]
+
+[project.urls]
+Homepage = "https://buildwithsumit.com/globus"
+Repository = "https://github.com/Build-With-Sumit/globus"
+Issues = "https://github.com/Build-With-Sumit/globus/issues"
+"Managed version" = "https://buildwithsumit.com/community.html"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["server*"]
