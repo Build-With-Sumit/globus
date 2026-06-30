@@ -444,11 +444,20 @@ def mark_chat_resolved(email, chat_name_fragment):
 # Tools we DON'T register in v0.2 — the LLM will see "unknown tool" if
 # it tries to call them. Wired up in v0.3.
 # Tools the schema advertises but the OSS install hasn't wired yet. v0.3b
-# registers list_recent_emails (Gmail vault), so it drops out of this set
-# at runtime when sync_gmail imports cleanly. The rest land in later phases.
-_V03_TOOLS = {"send_telegram_via_bot", "run_agent"}
+# registers list_recent_emails when Gmail sync imports, v0.5 registers
+# run_agent when agent_runner imports. send_telegram_via_bot is the last
+# v0.3c+ piece (Telegram BOT API; the bridge-extension ingest side is
+# already shipped, this is the WRITE path).
+_V03_TOOLS = {"send_telegram_via_bot"}
 if not _GMAIL_AVAILABLE:
     _V03_TOOLS = _V03_TOOLS | {"list_recent_emails"}
+
+try:
+    from agent_runner import agent_run_async
+    _AGENTS_AVAILABLE = True
+except Exception:
+    _AGENTS_AVAILABLE = False
+    _V03_TOOLS = _V03_TOOLS | {"run_agent"}
 
 
 def _run_tools_loop(system, msgs, email, max_tokens=2000,
@@ -569,6 +578,10 @@ def _run_tools_loop(system, msgs, email, max_tokens=2000,
                         limit=inp.get("limit", 30),
                         sender_filter=inp.get("sender_filter"),
                         subject_filter=inp.get("subject_filter"))
+                    iter_non_search_calls += 1
+                elif name == "run_agent" and _AGENTS_AVAILABLE:
+                    result = agent_run_async(
+                        (inp.get("agent") or "").strip(), email)
                     iter_non_search_calls += 1
                 elif name in _V03_TOOLS:
                     result = {"error": f"tool {name!r} not wired in v0.2 — "

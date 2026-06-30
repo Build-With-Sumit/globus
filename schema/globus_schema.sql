@@ -334,3 +334,20 @@ CREATE TABLE IF NOT EXISTS globus_agent_schedules (
                   ON UPDATE CURRENT_TIMESTAMP,
   UNIQUE KEY uniq_email_agent (member_email, agent_name)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- One row per agent run (success + failure). Powers the chat-page
+-- agent-activity console + the brief viewer at /members/globus/agents/run.
+CREATE TABLE IF NOT EXISTS globus_agent_runs (
+  id              BIGINT AUTO_INCREMENT PRIMARY KEY,
+  member_email    VARCHAR(320) NOT NULL,
+  agent_name      VARCHAR(80) NOT NULL,
+  status          ENUM('running','ok','error') NOT NULL DEFAULT 'running',
+  brief_path      VARCHAR(1024),
+  bytes_written   INT,
+  error_message   TEXT,
+  started_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  finished_at     TIMESTAMP NULL,
+  KEY ix_email_agent_started (member_email, agent_name, started_at),
+  KEY ix_email_started (member_email, started_at),
+  KEY ix_status (status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

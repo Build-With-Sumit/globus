@@ -170,6 +170,11 @@ from bridge_ingest import (  # noqa: E402
     BRIDGE_INGEST_MAX_BYTES, BRIDGE_INGEST_MAX_MESSAGES,
 )
 from connectors_html import whatsapp_setup_html  # noqa: E402
+from agent_runner import (  # noqa: E402
+    agent_status, agent_run_async, run_agent_for_member,
+    catalog_for_member, find_agent,
+)
+from agents_dashboard_html import agents_dashboard_html  # noqa: E402
 
 
 EMAIL_RE = __import__("re").compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -255,6 +260,11 @@ def _members_landing(email):
         '      <span class="tc-icon">💬</span> Teams &amp; WhatsApp</div></div>'
         '    <p class="tc-desc">Chrome extension bridge for chat history.</p>'
         '    <div class="tc-foot">Pair &rarr;</div></a>'
+        '  <a class="tool-card" href="/members/globus/agents">'
+        '    <div class="tc-head"><div class="tc-title">'
+        '      <span class="tc-icon">🤖</span> Agents</div></div>'
+        '    <p class="tc-desc">Background tasks that produce daily briefs.</p>'
+        '    <div class="tc-foot">Open &rarr;</div></a>'
         '  <a class="tool-card" href="/members/vault-progress">'
         '    <div class="tc-head"><div class="tc-title">'
         '      <span class="tc-icon">📊</span> Vault progress</div></div>'
@@ -271,7 +281,7 @@ def _members_landing(email):
 # ─────────────────────────────────────────────────────────────────────
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "globus/0.4"
+    server_version = "globus/0.5"
 
     def log_message(self, fmt, *args):
         return
@@ -338,7 +348,7 @@ class Handler(BaseHTTPRequestHandler):
 
         if route == "/api/health":
             return self._send_json(200,
-                                    {"ok": True, "app": "globus", "v": "0.4"})
+                                    {"ok": True, "app": "globus", "v": "0.5"})
 
         # Static assets
         if route in ("/favicon.svg", "/styles.css", "/main.js"):
@@ -509,6 +519,12 @@ class Handler(BaseHTTPRequestHandler):
             return self._send_html(200, whatsapp_setup_html(
                 email, whatsapp_token_make(email)))
 
+        if route == "/members/globus/agents":
+            return self._send_html(200, agents_dashboard_html(
+                email,
+                catalog_for_member(email),
+                agent_status(email=email)))
+
         if route == "/members/vault-progress":
             return self._send_html(200, vault_progress_html(email))
 
@@ -520,10 +536,9 @@ class Handler(BaseHTTPRequestHandler):
                                         {"error": f"{type(e).__name__}: {e}"})
 
         if route == "/api/globus/agent-status":
-            # v0.2: no agents wired by default. Return empty so the
-            # chat-page agent console renders quietly.
-            return self._send_json(200, {"running": [], "recent_runs": [],
-                                          "latest_per_agent": {}})
+            # Powers the chat-page activity console. v0.5+: backed by
+            # the globus_agent_runs table via agent_runner.agent_status.
+            return self._send_json(200, agent_status(email=email))
 
         if route == "/api/globus/voice-token":
             # Cookie-authed refresh route — used by the chat page if
@@ -700,6 +715,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_json(500,
                         {"error": f"{type(e).__name__}: {e}"})
 
+        if route == "/members/globus/agents/run":
+            form = self._form()
+            name = (form.get("agent") or "").strip()
+            if not find_agent(name):
+                return self._redirect("/members/globus/agents")
+            agent_run_async(name, email)
+            return self._redirect("/members/globus/agents")
+
         if route == "/members/connect/google/sync":
             form = self._form()
             try:
@@ -750,7 +773,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    print(f"globus/0.4 booting on {HOST}:{PORT}", flush=True)
+    print(f"globus/0.5 booting on {HOST}:{PORT}", flush=True)
     print(f"  site:     {SITE}", flush=True)
     print(f"  db:       {DB_CFG['user']}@{DB_CFG['host']}:{DB_CFG['port']}/"
           f"{DB_CFG['database']}", flush=True)

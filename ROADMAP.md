@@ -196,18 +196,43 @@ What's intentionally NOT in v0.4 OSS:
   provider switching via `GLOBUS_LLM_PROVIDER` — no separate voice
   routing needed.
 
-## v0.5 — agents
+## v0.5 (current) — agents
 
-- [ ] **Per-member agent dirs** — `agents_runtime` plumbing already
-  shipped; needs the `/members/globus/agents/configure` route + the
-  schedule writer.
-- [ ] **Agent execution model** — separate process (not in-server)
-  triggered by cron. Reference uses Hermes (`/opt/hermes/bin/run-agent.sh`)
-  but it's not strictly required — anything that produces `*-{date}.md`
-  files in `/opt/hermes/work/` works.
-- [ ] **Sample agents** — ship 3 working example agents (research,
-  sales-desk, infra-watch) that match the catalog entries. Today the
-  catalog is just metadata.
+Shipped:
+
+- ✅ **OSS-native agent runner** (`server/agent_runner.py`, ~250 lines)
+  — no Hermes dependency. An agent is a catalog entry with a
+  `task_prompt`; running it = call the chat orchestrator with that
+  prompt as the member's question, write the LLM reply to disk as
+  a dated markdown brief, track the run in `globus_agent_runs`.
+- ✅ **`globus_agent_runs` history table** — one row per run (success
+  + failure + still-running). Drives the chat-page activity console
+  + the /members/globus/agents dashboard.
+- ✅ **Sample agents** — `research`, `sales-desk`, `infra-watch`
+  now ship with actual `task_prompt` fields. Adapt as you like;
+  these run unmodified on any v0.5 install.
+- ✅ **`run_agent` LLM tool** registered when `agent_runner` imports
+  cleanly. Fires the agent fire-and-forget; brief lands ~30s later
+  in the activity console. Member can also click "Run now" on the
+  /members/globus/agents dashboard.
+- ✅ **`/members/globus/agents` dashboard** (`agents_dashboard_html.py`)
+  — running-now panel + recent-runs table + catalog cards with
+  per-agent "last brief" badges.
+- ✅ **`/api/globus/agent-status` endpoint** — JSON, polled by the
+  chat-page console every 5s. Per-member scoped.
+- ✅ **`scripts/run_agent.py`** — cron-friendly CLI:
+  `python3 scripts/run_agent.py <agent> <member-email>`. Exits 0 on
+  success / 1 on catalog-or-member error / 2 on run failure.
+- ✅ **Per-member work dir** — briefs land at
+  `$GLOBUS_AGENTS_WORK_DIR/<sha1(email)[:16]>/<agent>-<YYYY-MM-DD-HHMM>.md`
+  (default `/var/lib/globus/agents/...`). One member can never read
+  another member's briefs (FS-level isolation via path).
+
+Reference Hermes adapter — `server/agents_runtime.py` is still shipped
+for installs that already use the Hermes runner (multi-tenant agent
+fleet with `/opt/hermes/bin/run-agent.sh`). The OSS-native runner is
+the default; wire the Hermes adapter into the route handler if you
+prefer that execution model.
 
 ## v1.0 — production-ready
 

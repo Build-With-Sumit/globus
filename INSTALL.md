@@ -1,12 +1,13 @@
 # Installing Globus
 
 > **Status: alpha.** The reference implementation runs in production at
-> buildwithsumit.com. This guide gets v0.4 running on your box — that's
-> sign-in via OTP, vault from any combination of Obsidian zip + Google
-> Drive + Gmail, working text chat **and voice chat** (ElevenLabs orb;
-> see [`docs/voice-setup.md`](docs/voice-setup.md)). WhatsApp/Telegram/
-> Teams bridges and the agents subsystem are later phases — see
-> [ROADMAP.md](ROADMAP.md).
+> buildwithsumit.com. This guide gets v0.5 running on your box — sign-in
+> via OTP, vault from Obsidian zip + Google Drive + Gmail + the
+> WhatsApp/Teams Chrome extension, text and voice chat (ElevenLabs;
+> see [`docs/voice-setup.md`](docs/voice-setup.md)), and a working
+> agents subsystem (3 sample agents that produce daily markdown briefs;
+> see `/members/globus/agents`). Telegram via Telethon daemon is the
+> only major source still ahead — see [ROADMAP.md](ROADMAP.md).
 
 ## What you'll need
 
@@ -214,6 +215,32 @@ sender by editing `server/members_auth_html.py`).
 | Drive sync silently does nothing | Check the boot banner — `bg-sync: disabled` means `GOOGLE_OAUTH_CLIENT_ID` isn't set. Inserting it into `config` requires a service restart (cfg is cached at boot). |
 | OAuth flow fails with "GLOBUS_OAUTH_ENCRYPTION_KEY not configured" | Generate a Fernet key and add to `config` table. See [§ Google OAuth](#3-bootstrap-config) above. |
 | Drive sync silently stalls mid-run after a restart | Should auto-recover — the worker resets stale `running` rows on boot. If not, manually run `UPDATE globus_oauth_connections SET sync_status='idle' WHERE sync_status='running';` then restart. |
+
+## 9. (optional) Schedule agents
+
+Each agent in `server/globus_agents_catalog.py` declares a `schedule`
+(e.g. `"08:00 daily"`) but the OSS runner doesn't parse cron
+expressions — your crontab does. Wire your agents like this:
+
+```bash
+# /etc/cron.d/globus-agents — fire at 8 AM IST (= 02:30 UTC)
+30 2 * * * globus  cd /opt/globus && /opt/globus/.venv/bin/python3 \
+    scripts/run_agent.py research you@example.com \
+    >> /var/log/globus-agents.log 2>&1
+0  3 * * * globus  cd /opt/globus && /opt/globus/.venv/bin/python3 \
+    scripts/run_agent.py sales-desk you@example.com \
+    >> /var/log/globus-agents.log 2>&1
+*/30 * * * * globus  cd /opt/globus && /opt/globus/.venv/bin/python3 \
+    scripts/run_agent.py infra-watch you@example.com \
+    >> /var/log/globus-agents.log 2>&1
+```
+
+Briefs land at `$GLOBUS_AGENTS_WORK_DIR/<sha1(email)[:16]>/` (default
+`/var/lib/globus/agents/`) and surface in the chat-page activity
+console + at `/members/globus/agents`.
+
+To fire on demand without cron: tap "Run now" on
+`/members/globus/agents`, or just ask Globus in chat ("run research").
 
 ## Upgrading
 

@@ -11,14 +11,23 @@ Required fields:
   - name:        unique slug used by run_agent + brief filename
   - role:        one-line job title shown in the UI
   - summary:     paragraph shown in the catalog card
-  - skill_path:  filesystem path to the agent's working directory
-                 (the agent runtime checks `basename(skill_path)-*.md`
-                 in /opt/hermes/work/ to detect "live" vs "planned")
+  - task_prompt: the actual prompt the agent runs against the chat
+                 orchestrator. The orchestrator has access to every
+                 tool the member has wired up (search_files, read_file,
+                 list_recent_emails, search_telegram, search_whatsapp).
+                 Write this as a clear instruction to the LLM —
+                 "produce a brief that does X, Y, Z."
   - schedule:    free-text — cron line OR on-demand OR human-readable
+                 (cron parsing is the cron's job, not this catalog's)
   - data_sources: list of strings shown under "Data sources" in the UI
   - capabilities: list of capability tags (`read`, `post-to-tg`, etc.)
   - can_do:      bullet list — what this agent CAN do
   - cannot_do:   bullet list — explicit boundaries (be honest!)
+
+Legacy / optional fields (only relevant if you wire a Hermes-style
+external runner instead of the OSS-native agent_runner.py):
+  - skill_path:  filesystem path to a Hermes SKILL.md (ignored by the
+                 OSS runner — kept for backwards compat with old installs)
 
 Optional fields:
   - name_origin: lore/why-this-name (rendered as a styled blockquote)
@@ -68,7 +77,21 @@ GLOBUS_AGENTS_CATALOG = [
                    "Read-only; never sends or modifies anything.",
         "name_origin": "The simplest possible agent shape. Use this as "
                        "your template when adding new agents.",
-        "skill_path": "/opt/hermes/.hermes/skills/research",
+        "task_prompt": (
+            "Produce my morning research brief.\n\n"
+            "1. List_recent_emails (last 7 days) and surface the 3-5 "
+            "threads that most need a response from me.\n"
+            "2. Search_files for anything in my vault tagged with "
+            "decision/, strategy/, or incident/ that was modified in "
+            "the last week.\n"
+            "3. If I have telegram or whatsapp data, search for any "
+            "open questions directed at me in the last 3 days.\n\n"
+            "Output a single markdown brief with three sections "
+            "(Inbox, Vault changes, Open questions). Be specific — "
+            "cite the file/email/chat each item came from. Keep it "
+            "scannable: bullets, no fluff. Do NOT take any action; "
+            "this is read-only."
+        ),
         "schedule": "08:00 daily (cron)",
         "data_sources": _VAULT_SOURCES + [
             _GMAIL_SOURCE,
@@ -100,7 +123,22 @@ GLOBUS_AGENTS_CATALOG = [
         "summary": "Daily sales-desk audit — pipeline health, stalled "
                    "deals, today's ranked action list, draft follow-up "
                    "messages, CRM hygiene flags. Drafts but never sends.",
-        "skill_path": "/opt/hermes/.hermes/skills/sales-desk",
+        "task_prompt": (
+            "Audit my sales pipeline for the day.\n\n"
+            "1. Search_files for the most recent CRM exports / pipeline "
+            "trackers / deal notes in my vault.\n"
+            "2. List_recent_emails (last 14 days) with sender_filter "
+            "scoped to anyone outside my own domain (likely "
+            "prospects/customers).\n"
+            "3. Identify: deals that look stalled (no activity >7d), "
+            "deals where I owe the next move, any new inbound that "
+            "hasn't been triaged.\n\n"
+            "Output a markdown brief with: (a) top 5 ranked actions "
+            "for today with a one-line draft response each, (b) CRM "
+            "hygiene flags (missing fields, possible duplicates), (c) "
+            "stalled deals worth a nudge. Draft language only — never "
+            "send anything."
+        ),
         "schedule": "08:30 daily (cron)",
         "data_sources": _VAULT_SOURCES + _CRM_SOURCES + [
             "Deal notes (vault/auto/deal/)",
@@ -132,7 +170,21 @@ GLOBUS_AGENTS_CATALOG = [
         "summary": "Watches servers, services, deploys, crons. Surfaces "
                    "degraded services before they become outages. "
                    "Posts alerts to a Telegram channel (allow-listed).",
-        "skill_path": "/opt/hermes/.hermes/skills/infra-watch",
+        "task_prompt": (
+            "Run my infrastructure health check.\n\n"
+            "1. Search_files for any incident notes, deploy logs, or "
+            "monitoring digests modified in the last 24 hours.\n"
+            "2. List_recent_emails (last 1 day) with subject_filter "
+            "'alert' OR 'down' OR 'failed' OR 'incident' to surface "
+            "any alerting that hit my inbox.\n\n"
+            "Output a short markdown brief: GREEN (all clear) / YELLOW "
+            "(watching) / RED (act now). Be specific about what you "
+            "saw and where. If there's nothing to flag, say so in one "
+            "line — don't pad. This catalog entry COULD post to TG via "
+            "the send_telegram_via_bot tool, but the OSS default is "
+            "draft-only — paste the alert text and let the operator "
+            "decide whether to actually send."
+        ),
         "schedule": "every 30 min (cron)",
         "data_sources": _VAULT_SOURCES + [
             "Server health + uptime endpoints",

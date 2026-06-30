@@ -134,12 +134,15 @@ Globus is opinionated. Bring your own:
 
 ## Status
 
-- **v0.4 + partial v0.3c (current)** — text + voice chat on a fresh
-  install, vault from any combo of Obsidian zip / Google Drive / Gmail
-  / WhatsApp Web / Microsoft Teams (the last two via a Chrome
-  extension bridge that POSTs to `/api/globus/{whatsapp,teams}/ingest`
-  with an HMAC-token; pair at `/members/whatsapp`). Telegram via
-  Telethon daemon and the agents subsystem are still ahead — see
+- **v0.5 (current)** — text + voice chat, vault from any combo of
+  Obsidian zip / Google Drive / Gmail / WhatsApp Web / Microsoft Teams
+  (the last two via a Chrome extension bridge), **plus a working agents
+  subsystem**: 3 sample agents (research, sales-desk, infra-watch)
+  produce daily markdown briefs you can read at 8 AM. Fire from chat
+  ("run research"), the dashboard at `/members/globus/agents`, or
+  cron via `scripts/run_agent.py`. Each brief lands as a per-member
+  file on disk + a row in `globus_agent_runs`. Telegram via Telethon
+  daemon (separate repo) is the only major source still ahead — see
   [ROADMAP.md](ROADMAP.md).
 - **Alpha** — works in production at buildwithsumit.com but every
   install will need hands-on setup. No managed-installer yet.
