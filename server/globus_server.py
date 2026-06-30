@@ -107,6 +107,14 @@ voice_providers.configure(
     deepseek_api_key_getter=lambda: (cfg("DEEPSEEK_API_KEY", "") or "").strip(),
     default_model=_voice_default_model())
 
+# Narada plugin auto-loader — imports every server/narada_plugins/*.py,
+# which triggers each plugin's module-level register() call. Safe even
+# on installs that don't use Narada (no plugins = empty registry).
+# Called AFTER db_helpers + oauth_db are configured because plugins
+# may import narada_creds which talks to both.
+import narada_plugins  # noqa: E402
+narada_plugins.load_all_plugins()
+
 import auth_cookies  # noqa: E402
 auth_cookies.configure(session_secret=SESSION_SECRET,
                        session_ttl=int(os.environ.get("SESSION_TTL_SEC",

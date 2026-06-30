@@ -335,6 +335,138 @@ CREATE TABLE IF NOT EXISTS globus_agent_schedules (
   UNIQUE KEY uniq_email_agent (member_email, agent_name)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- ─────────────────────────────────────────────────────────────────────
+-- Narada — Globus Outbound Agent (see docs/prd/narada-outbound-agent.md)
+-- 6 tables: campaigns, prospects, sends, suppression, credentials,
+-- angle_memory. Per-member-isolated. Plugin-agnostic — `sender`,
+-- `lead_source`, `verifier`, `crm` columns hold plugin slugs that
+-- the registry resolves at runtime.
+-- ─────────────────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS globus_narada_campaigns (
+  id              BIGINT AUTO_INCREMENT PRIMARY KEY,
+  member_email    VARCHAR(320) NOT NULL,
+  name            VARCHAR(255),
+  product         VARCHAR(120),
+  icp_description TEXT,
+  icp_filters     JSON,
+  lead_source     VARCHAR(80),
+  verifier        VARCHAR(80),
+  sender          VARCHAR(80),
+  sender_config   JSON,
+  crm             VARCHAR(80),
+  sequence_steps  JSON,
+  send_mode       ENUM('approve_each','autopilot') NOT NULL DEFAULT 'approve_each',
+  status          ENUM('draft','reviewing','sending','paused','done','error')
+                  NOT NULL DEFAULT 'draft',
+  stats           JSON,
+  created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                  ON UPDATE CURRENT_TIMESTAMP,
+  KEY ix_member_status (member_email, status),
+  KEY ix_member_created (member_email, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS globus_narada_prospects (
+  id                   BIGINT AUTO_INCREMENT PRIMARY KEY,
+  campaign_id          BIGINT NOT NULL,
+  member_email         VARCHAR(320) NOT NULL,
+  first_name           VARCHAR(120),
+  last_name            VARCHAR(120),
+  email                VARCHAR(320),
+  email_verified       TINYINT(1) NOT NULL DEFAULT 0,
+  company              VARCHAR(255),
+  company_domain       VARCHAR(255),
+  title                VARCHAR(255),
+  linkedin_url         VARCHAR(512),
+  enrichment           JSON,
+  copy_variants        JSON,
+  approved_variant_idx INT,
+  status               ENUM('new','verified','enriched','drafted',
+                            'approved','sent','replied','unsubscribed',
+                            'bounced','suppressed','failed')
+                       NOT NULL DEFAULT 'new',
+  source_metadata      JSON,
+  created_at           TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at           TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                       ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uniq_campaign_email (campaign_id, email),
+  KEY ix_member_status (member_email, status),
+  KEY ix_campaign_status (campaign_id, status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS globus_narada_sends (
+  id                    BIGINT AUTO_INCREMENT PRIMARY KEY,
+  campaign_id           BIGINT NOT NULL,
+  prospect_id           BIGINT NOT NULL,
+  member_email          VARCHAR(320) NOT NULL,
+  step_idx              INT NOT NULL DEFAULT 0,
+  sender                VARCHAR(80),
+  from_addr             VARCHAR(320),
+  to_addr               VARCHAR(320),
+  subject               VARCHAR(512),
+  body_preview          TEXT,
+  message_id            VARCHAR(255),
+  thread_id             VARCHAR(255),
+  external_id           VARCHAR(255),
+  status                ENUM('queued','sent','delivered','opened',
+                             'replied','bounced','spam','failed')
+                        NOT NULL DEFAULT 'queued',
+  reply_classification  ENUM('interested','not_interested','ooo',
+                             'unsubscribe','referred','wrong_person',
+                             'question') NULL,
+  reply_body            TEXT,
+  reply_received_at     TIMESTAMP NULL,
+  sent_at               TIMESTAMP NULL,
+  created_at            TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  KEY ix_campaign (campaign_id),
+  KEY ix_prospect (prospect_id),
+  KEY ix_member_status (member_email, status),
+  KEY ix_member_sent (member_email, sent_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS globus_narada_suppression (
+  id             BIGINT AUTO_INCREMENT PRIMARY KEY,
+  member_email   VARCHAR(320) NOT NULL,
+  email          VARCHAR(320) NOT NULL,
+  reason         ENUM('unsubscribed','bounced','manual',
+                      'spam_complaint','wrong_person')
+                 NOT NULL,
+  added_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uniq_member_email (member_email, email)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Per-member, per-tool credentials. JSON blob is Fernet-encrypted
+-- using GLOBUS_OAUTH_ENCRYPTION_KEY (same key as Google OAuth tokens).
+CREATE TABLE IF NOT EXISTS globus_narada_credentials (
+  id              BIGINT AUTO_INCREMENT PRIMARY KEY,
+  member_email    VARCHAR(320) NOT NULL,
+  tool            VARCHAR(80) NOT NULL,
+  credential_enc  BLOB NOT NULL,
+  status          ENUM('active','expired','revoked')
+                  NOT NULL DEFAULT 'active',
+  last_used_at    TIMESTAMP NULL,
+  created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                  ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uniq_member_tool (member_email, tool)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS globus_narada_angle_memory (
+  id              BIGINT AUTO_INCREMENT PRIMARY KEY,
+  member_email    VARCHAR(320) NOT NULL,
+  icp_tag         VARCHAR(120),
+  angle_summary   VARCHAR(512),
+  example_copy    TEXT,
+  campaigns_used  JSON,
+  reply_rate      DECIMAL(5,2),
+  sample_size     INT,
+  last_seen_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  KEY ix_member_icp (member_email, icp_tag),
+  KEY ix_member_rate (member_email, reply_rate)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- ─────────────────────────────────────────────────────────────────────
 -- Composio integration — one row per (member, app) that the member
 -- has connected via Composio's managed OAuth. Stores the
 -- connected_account_id Composio gives us back; the actual OAuth
