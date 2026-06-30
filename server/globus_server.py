@@ -175,6 +175,9 @@ from agent_runner import (  # noqa: E402
     catalog_for_member, find_agent,
 )
 from agents_dashboard_html import agents_dashboard_html  # noqa: E402
+from telegram_bot_setup_html import telegram_bot_setup_html  # noqa: E402
+import urllib.request as _urlreq  # noqa: E402
+import urllib.error as _urlerr  # noqa: E402
 
 
 EMAIL_RE = __import__("re").compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -525,6 +528,13 @@ class Handler(BaseHTTPRequestHandler):
                 catalog_for_member(email),
                 agent_status(email=email)))
 
+        if route == "/members/telegram/bot":
+            qs = parse_qs(parsed.query)
+            return self._send_html(200, telegram_bot_setup_html(
+                email,
+                message=(qs.get("msg") or [""])[0] or None,
+                message_kind=(qs.get("kind") or [""])[0] or None))
+
         if route == "/members/vault-progress":
             return self._send_html(200, vault_progress_html(email))
 
@@ -722,6 +732,90 @@ class Handler(BaseHTTPRequestHandler):
                 return self._redirect("/members/globus/agents")
             agent_run_async(name, email)
             return self._redirect("/members/globus/agents")
+
+        if route == "/members/telegram/bot/add":
+            form = self._form()
+            token = (form.get("bot_token") or "").strip()
+            chats_raw = (form.get("allowed_chat_ids") or "").strip()
+            # Tokens look like `<int>:<35 chars of alnum + - + _>`. Reject
+            # obviously-malformed before hitting Telegram.
+            if not (":" in token and len(token) >= 30):
+                return self._redirect(
+                    "/members/telegram/bot?kind=error&msg="
+                    + quote("Bot token doesn't look right — should be "
+                            "<int>:<35+ chars> from @BotFather."))
+            try:
+                chat_ids = [int(x.strip()) for x in chats_raw.split(",")
+                            if x.strip()]
+            except ValueError:
+                return self._redirect(
+                    "/members/telegram/bot?kind=error&msg="
+                    + quote("allowed_chat_ids must be comma-separated "
+                            "integers (e.g. -1001234567890)."))
+            if not chat_ids:
+                return self._redirect(
+                    "/members/telegram/bot?kind=error&msg="
+                    + quote("Add at least one chat_id to the allow-list."))
+            # Verify the token by hitting Telegram's getMe. Catches typos
+            # + revoked tokens up-front so the audit log isn't full of
+            # 401s the first time the LLM tries to send.
+            try:
+                req = _urlreq.Request(
+                    f"https://api.telegram.org/bot{token}/getMe",
+                    method="GET")
+                with _urlreq.urlopen(req, timeout=15) as r:
+                    info = json.loads(r.read().decode())
+            except _urlerr.HTTPError as e:
+                return self._redirect(
+                    "/members/telegram/bot?kind=error&msg="
+                    + quote(f"Telegram rejected the token: HTTP {e.code}. "
+                            "Double-check it with @BotFather."))
+            except Exception as e:
+                return self._redirect(
+                    "/members/telegram/bot?kind=error&msg="
+                    + quote(f"Couldn't reach Telegram: "
+                            f"{type(e).__name__}"))
+            if not info.get("ok"):
+                return self._redirect(
+                    "/members/telegram/bot?kind=error&msg="
+                    + quote(f"Telegram rejected the token: "
+                            f"{info.get('description','unknown')}"))
+            bot_username = (info.get("result") or {}).get("username", "?")
+            try:
+                from oauth_db import encrypt_token
+                from db_helpers import db_write
+                db_write(
+                    "INSERT INTO globus_telegram_bots "
+                    "(member_email, bot_username, bot_token_enc, "
+                    " allowed_send_chats, allowed_actions, status) "
+                    "VALUES (%s, %s, %s, %s, %s, 'active')",
+                    (email, bot_username, encrypt_token(token),
+                     json.dumps(chat_ids),
+                     json.dumps(["reply", "broadcast"])))
+            except Exception as e:
+                return self._redirect(
+                    "/members/telegram/bot?kind=error&msg="
+                    + quote(f"Couldn't save: {type(e).__name__}"))
+            return self._redirect(
+                "/members/telegram/bot?kind=ok&msg="
+                + quote(f"Added @{bot_username} with "
+                        f"{len(chat_ids)} allowed chat_id(s)."))
+
+        if route == "/members/telegram/bot/delete":
+            form = self._form()
+            try:
+                bot_id = int(form.get("bot_id") or "0")
+            except (TypeError, ValueError):
+                bot_id = 0
+            if bot_id:
+                from db_helpers import db_write
+                db_write(
+                    "DELETE FROM globus_telegram_bots "
+                    "WHERE id=%s AND member_email=%s",
+                    (bot_id, email))
+            return self._redirect(
+                "/members/telegram/bot?kind=ok&msg="
+                + quote("Bot deleted."))
 
         if route == "/members/connect/google/sync":
             form = self._form()

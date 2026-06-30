@@ -262,10 +262,12 @@ Still ahead:
   optional LiveKit (transport).
 - [ ] **First-class public preview** — bring `public_globus_html` to a
   usable end-to-end demo with an allow-list / rate-limit story.
-- [ ] **Telegram bot setup UI** — currently `send_telegram_via_bot`
-  requires the bot row inserted via SQL. A `/members/telegram/bot`
-  form (with `botfather` token field + chat_id allow-list editor)
-  is small follow-on work.
+- ✅ **Telegram bot setup UI** (v1.0c) — `/members/telegram/bot` lets
+  the member paste a BotFather token + comma-separated allow-list of
+  chat_ids. Server validates the token by calling Telegram's `getMe`
+  before saving (so typos / revoked tokens get caught up-front), then
+  Fernet-encrypts and inserts. Page also lists existing bots and
+  recent send attempts from the audit log.
 
 ## Contributing
 
