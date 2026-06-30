@@ -176,6 +176,7 @@ from agent_runner import (  # noqa: E402
 )
 from agents_dashboard_html import agents_dashboard_html  # noqa: E402
 from telegram_bot_setup_html import telegram_bot_setup_html  # noqa: E402
+from public_chat import public_chat_send, is_enabled as _public_enabled  # noqa: E402
 import urllib.request as _urlreq  # noqa: E402
 import urllib.error as _urlerr  # noqa: E402
 
@@ -429,7 +430,8 @@ class Handler(BaseHTTPRequestHandler):
         route = parsed.path
 
         if route in ("/", "/globus", "/index.html"):
-            return self._send_html(200, public_globus_landing_html())
+            return self._send_html(200, public_globus_landing_html(
+                public_chat_enabled=_public_enabled()))
 
         if route == "/api/health":
             # Cheap by default — used by Docker HEALTHCHECK + load
@@ -680,6 +682,27 @@ class Handler(BaseHTTPRequestHandler):
                                                         "Code wrong or expired."))
             return self._redirect("/members/globus",
                                   [("Set-Cookie", make_cookie(email))])
+
+        # ---- Public preview chat (no auth, IP rate-limited) ----
+        # Opt-in via GLOBUS_PUBLIC_CHAT_ENABLED. Default off — fresh
+        # installs ship safe; no anonymous LLM spend until operator
+        # explicitly turns it on.
+        if route == "/api/public/chat":
+            if not _public_enabled():
+                return self._send_json(404, {"error": "not found"})
+            # Trust X-Forwarded-For if present (nginx + co set it on
+            # reverse-proxy installs); fall back to the socket peer.
+            # Take only the leftmost address — the chain is
+            # client, proxy1, proxy2, ... and we want the client.
+            fwd = self.headers.get("X-Forwarded-For", "")
+            client_ip = (fwd.split(",")[0].strip()
+                          if fwd else self.client_address[0])
+            ua = (self.headers.get("User-Agent") or "")[:255]
+            payload = self._json()
+            msg = (payload.get("message") or "").strip()
+            result = public_chat_send(client_ip, ua, msg)
+            return self._send_json(200 if result.get("ok") else 429,
+                                    result)
 
         # ---- Bridge ingest (extension-token auth, NOT cookie) ----
         # WhatsApp Web + Teams personal — same Chrome extension, two

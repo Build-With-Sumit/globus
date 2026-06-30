@@ -266,8 +266,15 @@ Still ahead:
 - [ ] **Voice cost rebuild** — ElevenLabs is fine for v0.4 but rough on
   margin at scale. Migrate to Cartesia (TTS) + Deepgram (STT) +
   optional LiveKit (transport).
-- [ ] **First-class public preview** — bring `public_globus_html` to a
-  usable end-to-end demo with an allow-list / rate-limit story.
+- ✅ **First-class public preview** (v1.0e) — opt-in anonymous demo
+  chat at the bottom of `/globus`. Enabled by setting
+  `GLOBUS_PUBLIC_CHAT_ENABLED=1` in config or env. Strict guardrails:
+  no vault access, no tools, no member data; per-IP sliding window
+  (5/hour) + per-IP DB-backed daily cap (25/day) + install-wide
+  daily cap (`GLOBUS_PUBLIC_CHAT_MAX_DAILY`, default 500); 500-char
+  input, 600-token output; X-Forwarded-For aware for reverse-proxy
+  installs; every request audited in `globus_public_chat_log`
+  (ip + status + char counts, no message body — PII-conscious).
 - ✅ **Telegram bot setup UI** (v1.0c) — `/members/telegram/bot` lets
   the member paste a BotFather token + comma-separated allow-list of
   chat_ids. Server validates the token by calling Telegram's `getMe`

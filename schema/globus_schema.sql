@@ -335,6 +335,23 @@ CREATE TABLE IF NOT EXISTS globus_agent_schedules (
   UNIQUE KEY uniq_email_agent (member_email, agent_name)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- Public preview chat — audit log for anonymous /api/public/chat hits.
+-- ip + day rate-limit lives here too (count(*) GROUP BY ip + WHERE
+-- created_at > NOW() - INTERVAL 1 DAY). Truncate periodically if it
+-- grows unbounded. No PII beyond the IP; do NOT log message bodies.
+CREATE TABLE IF NOT EXISTS globus_public_chat_log (
+  id              BIGINT AUTO_INCREMENT PRIMARY KEY,
+  ip              VARCHAR(64) NOT NULL,
+  user_agent      VARCHAR(255),
+  body_chars      INT,
+  reply_chars     INT,
+  status          ENUM('ok','rate_limited','blocked','error')
+                  NOT NULL DEFAULT 'ok',
+  created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  KEY ix_ip_created (ip, created_at),
+  KEY ix_created (created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 -- One row per agent run (success + failure). Powers the chat-page
 -- agent-activity console + the brief viewer at /members/globus/agents/run.
 CREATE TABLE IF NOT EXISTS globus_agent_runs (

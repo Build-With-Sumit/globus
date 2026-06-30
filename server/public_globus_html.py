@@ -12,9 +12,59 @@ from __future__ import annotations
 from html_chrome import _page
 
 
-def public_globus_landing_html():
+def public_globus_landing_html(public_chat_enabled=False):
     """Public page at /globus — explains what Globus is + what's being
-    built. No auth required. Renders inside the standard _page() shell."""
+    built. No auth required. Renders inside the standard _page() shell.
+
+    public_chat_enabled: if True, an anonymous demo chat box is shown
+      below the hero (posts to /api/public/chat — see public_chat.py).
+      Default off so fresh installs don't expose LLM spend to anyone
+      who hits the landing page."""
+    chat_box = ""
+    if public_chat_enabled:
+        chat_box = (
+            '<div class="panel" style="max-width:680px;margin:1.6rem auto 0;'
+            'text-align:left">'
+            '<p class="muted small" style="margin:0 0 .6rem">'
+            'Try the demo — no signup. (Rate-limited; sign in for the '
+            'full vault chat with your own data.)</p>'
+            '<form id="public-chat-form" onsubmit="return _publicChat(event)">'
+            '<textarea id="public-chat-input" rows="2" required '
+            'maxlength="500" placeholder="What is Globus? How do I install it?" '
+            'style="width:100%;padding:.6rem;border:1px solid var(--line);'
+            'border-radius:6px;font-family:inherit;font-size:.95rem;'
+            'resize:vertical"></textarea>'
+            '<div style="margin-top:.5rem;display:flex;justify-content:space-between;'
+            'align-items:center;gap:.5rem">'
+            '<span class="muted small" id="public-chat-status">&nbsp;</span>'
+            '<button type="submit" class="btn btn-primary" id="public-chat-send">'
+            'Send</button></div>'
+            '</form>'
+            '<div id="public-chat-reply" style="margin-top:.9rem;'
+            'white-space:pre-wrap;font-size:.92rem;line-height:1.5"></div>'
+            '</div>'
+            '<script>'
+            'async function _publicChat(e){'
+            '  e.preventDefault();'
+            '  var inp=document.getElementById("public-chat-input");'
+            '  var btn=document.getElementById("public-chat-send");'
+            '  var stat=document.getElementById("public-chat-status");'
+            '  var out=document.getElementById("public-chat-reply");'
+            '  var msg=inp.value.trim(); if(!msg) return false;'
+            '  btn.disabled=true; stat.textContent="thinking…";'
+            '  out.textContent="";'
+            '  try{'
+            '    var r=await fetch("/api/public/chat",{'
+            '      method:"POST",headers:{"Content-Type":"application/json"},'
+            '      body:JSON.stringify({message:msg})});'
+            '    var j=await r.json();'
+            '    if(j.ok){out.textContent=j.reply; stat.textContent="";}'
+            '    else{stat.textContent=j.error||"error"; stat.style.color="#b00020";}'
+            '  }catch(err){stat.textContent="network error"; stat.style.color="#b00020";}'
+            '  btn.disabled=false; return false;'
+            '}'
+            '</script>')
+
     body = (
         '<section class="section">'
         '<div class="container narrow center" style="padding-bottom:2rem">'
@@ -31,6 +81,7 @@ def public_globus_landing_html():
         '<a class="btn btn-lg" href="/community.html">Join the community</a>'
         '</div>'
         '<p class="muted small">Members area &middot; sign in required</p>'
+        + chat_box +
         '</div></section>'
 
         # === What Globus actually does ===
