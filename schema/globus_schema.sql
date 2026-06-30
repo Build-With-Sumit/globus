@@ -247,7 +247,9 @@ CREATE TABLE IF NOT EXISTS globus_whatsapp_messages (
   body            TEXT,
   direction       ENUM('in','out','unknown') NOT NULL DEFAULT 'unknown',
   wa_ts           VARCHAR(64),
+  fingerprint     VARCHAR(64),
   received_at     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uniq_email_fp (member_email, fingerprint),
   KEY ix_email_received (member_email, received_at),
   KEY ix_email_chat (member_email, chat_name)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -301,10 +303,17 @@ CREATE TABLE IF NOT EXISTS globus_teams_messages (
   id              BIGINT AUTO_INCREMENT PRIMARY KEY,
   member_email    VARCHAR(320) NOT NULL,
   ms_chat_id      VARCHAR(255),
+  ms_message_id   VARCHAR(255),
   chat_name       VARCHAR(255),
+  chat_type       VARCHAR(40),
   sender          VARCHAR(255),
+  sender_user_id  VARCHAR(120),
   body            TEXT,
+  body_type       VARCHAR(20),
+  ms_ts           TIMESTAMP NULL,
+  fingerprint     VARCHAR(64),
   received_at     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uniq_email_fp (member_email, fingerprint),
   KEY ix_email_received (member_email, received_at),
   KEY ix_email_chat (member_email, ms_chat_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

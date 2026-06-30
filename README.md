@@ -134,13 +134,13 @@ Globus is opinionated. Bring your own:
 
 ## Status
 
-- **v0.4 (current)** — text **and voice** chat work on a fresh install:
-  sign in via OTP, vault from any combo of Obsidian zip / Google Drive /
-  Gmail, chat by typing or by tapping the orb (JARVIS-style ElevenLabs
-  voice over the same brain + same vault). See
-  [`docs/voice-setup.md`](docs/voice-setup.md) for the ElevenLabs
-  agent setup. v0.3c bridges (Telegram/WhatsApp/Teams) and v0.5 agents
-  are still ahead — see [ROADMAP.md](ROADMAP.md).
+- **v0.4 + partial v0.3c (current)** — text + voice chat on a fresh
+  install, vault from any combo of Obsidian zip / Google Drive / Gmail
+  / WhatsApp Web / Microsoft Teams (the last two via a Chrome
+  extension bridge that POSTs to `/api/globus/{whatsapp,teams}/ingest`
+  with an HMAC-token; pair at `/members/whatsapp`). Telegram via
+  Telethon daemon and the agents subsystem are still ahead — see
+  [ROADMAP.md](ROADMAP.md).
 - **Alpha** — works in production at buildwithsumit.com but every
   install will need hands-on setup. No managed-installer yet.
 - **Roadmap** is in [ROADMAP.md](ROADMAP.md). Voice cost/latency rebuild

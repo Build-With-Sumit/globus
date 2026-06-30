@@ -85,6 +85,12 @@ html_chrome.configure(site=SITE, members_dir=MEMBERS_DIR)
 import voice_helpers  # noqa: E402
 voice_helpers.configure(session_secret=SESSION_SECRET)
 
+# bridge_ingest signs the long-TTL Chrome-extension tokens for WA + Teams.
+# Same SESSION_SECRET so any rotation invalidates voice + bridge tokens
+# in lock-step (good — minimises stale-credential blast radius).
+import bridge_ingest  # noqa: E402
+bridge_ingest.configure(session_secret=SESSION_SECRET)
+
 # voice_providers needs a DeepSeek key getter (lazy — re-reads cfg() on
 # each call) + the default model name shown in OpenAI-shape responses.
 # Both safe to configure even on installs that don't enable voice — the
@@ -158,6 +164,12 @@ from voice_helpers import voice_token_make  # noqa: E402
 from voice_route import (  # noqa: E402
     authenticate_voice_request, voice_chat_handle, voice_chat_format_response,
 )
+from bridge_ingest import (  # noqa: E402
+    whatsapp_token_make, whatsapp_token_verify,
+    whatsapp_ingest_messages, teams_ingest_messages,
+    BRIDGE_INGEST_MAX_BYTES, BRIDGE_INGEST_MAX_MESSAGES,
+)
+from connectors_html import whatsapp_setup_html  # noqa: E402
 
 
 EMAIL_RE = __import__("re").compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -236,8 +248,13 @@ def _members_landing(email):
         '  <a class="tool-card" href="/members/connect">'
         '    <div class="tc-head"><div class="tc-title">'
         '      <span class="tc-icon">🔗</span> Connect data</div></div>'
-        '    <p class="tc-desc">Sync Google Drive into your vault.</p>'
+        '    <p class="tc-desc">Sync Google Drive + Gmail into your vault.</p>'
         '    <div class="tc-foot">Connect &rarr;</div></a>'
+        '  <a class="tool-card" href="/members/whatsapp">'
+        '    <div class="tc-head"><div class="tc-title">'
+        '      <span class="tc-icon">💬</span> Teams &amp; WhatsApp</div></div>'
+        '    <p class="tc-desc">Chrome extension bridge for chat history.</p>'
+        '    <div class="tc-foot">Pair &rarr;</div></a>'
         '  <a class="tool-card" href="/members/vault-progress">'
         '    <div class="tc-head"><div class="tc-title">'
         '      <span class="tc-icon">📊</span> Vault progress</div></div>'
@@ -484,6 +501,14 @@ class Handler(BaseHTTPRequestHandler):
                 "/members/connect?kind=ok&msg="
                 + quote(f"Connected {account}. First sync started in the background."))
 
+        if route == "/members/whatsapp":
+            # Settings page for the Chrome-extension pairing flow.
+            # Mints a fresh 90d HMAC token on every render so any old
+            # leaked token gets superseded the next time the member
+            # opens this page.
+            return self._send_html(200, whatsapp_setup_html(
+                email, whatsapp_token_make(email)))
+
         if route == "/members/vault-progress":
             return self._send_html(200, vault_progress_html(email))
 
@@ -541,6 +566,56 @@ class Handler(BaseHTTPRequestHandler):
                                                         "Code wrong or expired."))
             return self._redirect("/members/globus",
                                   [("Set-Cookie", make_cookie(email))])
+
+        # ---- Bridge ingest (extension-token auth, NOT cookie) ----
+        # WhatsApp Web + Teams personal — same Chrome extension, two
+        # endpoints. Auth: `Authorization: Bearer <wa-token>`. The body
+        # is read with a higher cap (4MB) so a single batch of 500 WA
+        # messages with full bodies fits.
+        if route in ("/api/globus/whatsapp/ingest",
+                     "/api/globus/teams/ingest"):
+            auth = self.headers.get("Authorization", "")
+            if not auth.startswith("Bearer "):
+                return self._send_json(401, {"error": "missing bearer"})
+            member = whatsapp_token_verify(auth[7:].strip())
+            if not member:
+                return self._send_json(
+                    401, {"error": "invalid or expired token"})
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+            except ValueError:
+                return self._send_json(400, {"error": "bad length"})
+            if length <= 0 or length > BRIDGE_INGEST_MAX_BYTES:
+                return self._send_json(413, {
+                    "error": f"body must be 1..{BRIDGE_INGEST_MAX_BYTES} bytes"})
+            ctype = (self.headers.get("Content-Type") or "").lower()
+            if "application/json" not in ctype:
+                return self._send_json(415, {
+                    "error": "content-type must be application/json"})
+            try:
+                payload = json.loads(self.rfile.read(length).decode("utf-8"))
+            except Exception as e:
+                return self._send_json(400, {
+                    "error": f"could not parse body: {type(e).__name__}"})
+            if not isinstance(payload, dict):
+                return self._send_json(400, {"error": "bad json"})
+            messages = payload.get("messages") or []
+            if not isinstance(messages, list):
+                return self._send_json(422, {
+                    "error": "messages must be a list"})
+            if len(messages) > BRIDGE_INGEST_MAX_MESSAGES:
+                return self._send_json(413, {
+                    "error": f"max {BRIDGE_INGEST_MAX_MESSAGES} messages "
+                             "per batch"})
+            if route == "/api/globus/whatsapp/ingest":
+                saved, total = whatsapp_ingest_messages(member, messages)
+                print(f"[wa-ingest] member={member} got={total} "
+                      f"saved={saved}", flush=True)
+            else:
+                saved, total = teams_ingest_messages(member, messages)
+                print(f"[teams-ingest] member={member} got={total} "
+                      f"saved={saved}", flush=True)
+            return self._send_json(200, {"saved": saved, "total": total})
 
         # ---- Voice custom-LLM endpoint (voice-token auth, NOT cookie) ----
         # ElevenLabs hits this from its cloud, so we can't rely on a

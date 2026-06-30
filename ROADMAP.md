@@ -129,14 +129,40 @@ Shipped:
   `TypeError: sequence item 0: expected str instance, NoneType found`
   when a vault row had `provider_account=NULL`. Now skips those rows.
 
-## v0.3c — Telegram / WhatsApp / Teams bridges
+## v0.3c (current, partial) — Telegram / WhatsApp / Teams bridges
 
-- [ ] **Telegram bridge** — Telethon daemon + `globus_telegram_messages`
-  ingest. Existing reference at
-  https://github.com/Build-With-Sumit/telegram-bridge.
-- [ ] **WhatsApp bridge** — Chrome extension. Existing reference at
-  https://github.com/Build-With-Sumit/whatsapp-bridge.
-- [ ] **Microsoft Teams** — Graph API cron, OAuth, `globus_teams_messages`.
+Shipped:
+
+- ✅ **WhatsApp + Teams Chrome-extension ingest** (`server/bridge_ingest.py`):
+  one 90-day HMAC token covers both endpoints. POST
+  `/api/globus/whatsapp/ingest` and POST `/api/globus/teams/ingest`
+  accept JSON batches of up to 500 messages (4 MB max), bulk-insert
+  into `globus_whatsapp_messages` / `globus_teams_messages` with
+  fingerprint-based dedup (resending the same message is a no-op).
+  GET `/members/whatsapp` renders the existing setup page with a
+  freshly-minted token on every load.
+- ✅ **Schema deltas** — `fingerprint VARCHAR(64)` + `UNIQUE KEY
+  uniq_email_fp` on both message tables. Teams gets `ms_message_id`,
+  `chat_type`, `sender_user_id`, `body_type`, `ms_ts` columns the
+  extension already populates.
+- ✅ **Members landing tile** — new "Teams & WhatsApp" tile points
+  at `/members/whatsapp`.
+
+Outstanding:
+
+- [ ] **Chrome extension itself** — lives in the separate
+  [Build-With-Sumit/whatsapp-bridge](https://github.com/Build-With-Sumit/whatsapp-bridge)
+  repo (per the existing connectors_html setup page). One extension,
+  two scrapers (WA Web + teams.live.com). Sumit's reference
+  implementation is the upstream — fork + customise UI as needed.
+- [ ] **Telegram (Telethon daemon)** — lives in
+  [Build-With-Sumit/telegram-bridge](https://github.com/Build-With-Sumit/telegram-bridge).
+  The Globus server's read path (`search_telegram` tool) is already
+  shipped; you just need the daemon writing into `globus_telegram_messages`.
+- [ ] **Microsoft Teams via Graph API** (server-side OAuth + cron sync) —
+  alternative to the Chrome-extension Teams ingest. Mirrors the
+  Drive/Gmail OAuth shape. ~400 lines if you want it; the extension
+  path is the lighter-weight option.
 
 ## v0.4 (current) — voice
 
