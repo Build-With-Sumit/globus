@@ -185,6 +185,22 @@ from agent_runner import (  # noqa: E402
 from agents_dashboard_html import agents_dashboard_html  # noqa: E402
 from telegram_bot_setup_html import telegram_bot_setup_html  # noqa: E402
 from public_chat import public_chat_send, is_enabled as _public_enabled  # noqa: E402
+
+# Narada (outbound agent) imports — kept after narada_plugins.load_all_plugins()
+# above so the registry is populated before any route handler runs.
+import narada_core  # noqa: E402
+import narada_creds  # noqa: E402
+from narada_html import (  # noqa: E402
+    narada_dashboard_html, narada_credentials_html,
+    narada_new_campaign_html, narada_campaign_detail_html,
+)
+from narada_plugins import (  # noqa: E402
+    get_lead_source, get_verifier, get_sender, get_crm,
+    list_available_for_member,
+)
+from narada_plugins.types import (  # noqa: E402
+    ICPFilters, Lead, PluginCategory, SendStatus, VerifyStatus,
+)
 import urllib.request as _urlreq  # noqa: E402
 import urllib.error as _urlerr  # noqa: E402
 
@@ -277,6 +293,11 @@ def _members_landing(email):
         '      <span class="tc-icon">🤖</span> Agents</div></div>'
         '    <p class="tc-desc">Background tasks that produce daily briefs.</p>'
         '    <div class="tc-foot">Open &rarr;</div></a>'
+        '  <a class="tool-card" href="/members/narada">'
+        '    <div class="tc-head"><div class="tc-title">'
+        '      <span class="tc-icon">📣</span> Narada (Outbound)</div></div>'
+        '    <p class="tc-desc">End-to-end cold outreach campaigns.</p>'
+        '    <div class="tc-foot">Open &rarr;</div></a>'
         '  <a class="tool-card" href="/members/vault-progress">'
         '    <div class="tc-head"><div class="tc-title">'
         '      <span class="tc-icon">📊</span> Vault progress</div></div>'
@@ -365,7 +386,7 @@ def _deep_health():
                                        "claude-oauth")}
 
     return (200 if overall_ok else 503), {
-        "ok": overall_ok, "app": "globus", "v": "0.5",
+        "ok": overall_ok, "app": "globus", "v": "0.6",
         "checks": checks,
     }
 
@@ -375,7 +396,7 @@ def _deep_health():
 # ─────────────────────────────────────────────────────────────────────
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "globus/0.5"
+    server_version = "globus/0.6"
 
     def log_message(self, fmt, *args):
         return
@@ -432,6 +453,194 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             return {}
 
+    def _narada_run_action(self, email, camp, action, form):
+        """Dispatch a campaign-detail POST action to the right plugin.
+        Returns {"kind": "ok"|"error", "msg": "..."} for the redirect
+        banner. Never raises — every failure surfaces as a banner so
+        the marketer always sees what happened."""
+        cid = int(camp["id"])
+
+        if action == "find-leads":
+            ls_slug = camp.get("lead_source") or ""
+            ls = get_lead_source(ls_slug)
+            if not ls:
+                return {"kind": "error",
+                        "msg": f"lead source {ls_slug!r} not registered"}
+            try:
+                count = max(1, min(int(form.get("count") or 50), 500))
+            except ValueError:
+                count = 50
+            # ICPFilters: v1 uses the campaign's icp_description for the
+            # LLM-driven copy; lead-source search uses a thin map.
+            icp = ICPFilters(keywords=[(camp.get("icp_description") or "")[:500]])
+            try:
+                leads = ls.search(email, icp, count=count)
+            except Exception as e:
+                return {"kind": "error",
+                        "msg": f"search failed: {type(e).__name__}"}
+            res = narada_core.add_prospects(email, cid, leads)
+            return {"kind": "ok",
+                    "msg": f"Found {len(leads)} leads, added "
+                            f"{res['added']} (dup {res['skipped_dup']}, "
+                            f"suppressed {res['skipped_suppressed']})."}
+
+        if action == "verify":
+            v_slug = camp.get("verifier") or ""
+            v = get_verifier(v_slug) if v_slug else None
+            if not v:
+                return {"kind": "error",
+                        "msg": "no verifier configured for this campaign"}
+            prospects = narada_core.list_prospects(email, cid, status="new")
+            ok = bad = 0
+            for p in prospects[:50]:  # cap per click; rerun for more
+                result = v.verify(email, p["email"])
+                if result.status == VerifyStatus.VALID:
+                    narada_core.set_prospect_verified(email, p["id"], True)
+                    ok += 1
+                elif result.status == VerifyStatus.INVALID:
+                    narada_core.set_prospect_verified(email, p["id"], False)
+                    bad += 1
+            return {"kind": "ok",
+                    "msg": f"Verified {ok+bad} ({ok} valid / {bad} invalid)."}
+
+        if action == "draft":
+            # Lazy-import the LLM module so callers without LLM config
+            # don't pay the import cost on every Narada page load.
+            from narada_copy import draft_copy_for_prospect
+            prospects = [p for p in narada_core.list_prospects(email, cid)
+                          if p["status"] in ("new", "verified", "enriched")]
+            drafted = 0
+            for p in prospects[:20]:  # cap for budget; rerun for more
+                variants = draft_copy_for_prospect(
+                    member_email=email,
+                    product=camp.get("product") or "",
+                    prospect=p,
+                    campaign_icp_description=camp.get("icp_description") or "")
+                if variants:
+                    narada_core.set_prospect_copy(email, p["id"], variants)
+                    drafted += 1
+            return {"kind": "ok",
+                    "msg": f"Drafted copy for {drafted} prospect(s). "
+                            "Review + approve before sending."}
+
+        if action == "send":
+            sender_slug = camp.get("sender") or ""
+            sender = get_sender(sender_slug)
+            if not sender:
+                return {"kind": "error",
+                        "msg": f"sender {sender_slug!r} not registered"}
+            if not sender.is_available(email):
+                return {"kind": "error",
+                        "msg": f"sender {sender_slug!r} not connected. "
+                                "Set up at /members/narada/credentials."}
+            # In autopilot mode, treat all DRAFTED as approved; else
+            # only send APPROVED.
+            target_status = ("drafted"
+                              if camp.get("send_mode") == "autopilot"
+                              else "approved")
+            prospects = narada_core.list_prospects(
+                email, cid, status=target_status)
+            cap = sender.daily_send_cap(email)
+            sent = failed = 0
+            from_addr = (camp.get("sender_config") or {}).get(
+                "from_addr") if isinstance(camp.get("sender_config"), dict) \
+                else None
+            if not from_addr:
+                from_addr = email  # fall back to the member's own address
+            for p in prospects[:cap]:
+                variants = p.get("copy_variants") or []
+                if isinstance(variants, str):
+                    try:
+                        variants = json.loads(variants)
+                    except Exception:
+                        variants = []
+                idx = p.get("approved_variant_idx")
+                if idx is None and camp.get("send_mode") == "autopilot":
+                    idx = 0  # autopilot picks the first variant
+                if idx is None or not (0 <= idx < len(variants)):
+                    continue
+                v = variants[idx]
+                send_id = narada_core.queue_send(
+                    email, cid, p["id"],
+                    from_addr=from_addr,
+                    subject=v.get("subject") or "",
+                    body=v.get("body") or "",
+                    sender_slug=sender_slug)
+                if not send_id:
+                    continue  # suppressed
+                try:
+                    result = sender.send(
+                        member_email=email, from_addr=from_addr,
+                        to=p["email"], subject=v.get("subject") or "",
+                        body=v.get("body") or "")
+                except Exception as e:
+                    narada_core.mark_send_failed(
+                        send_id, f"{type(e).__name__}: {e}")
+                    failed += 1
+                    continue
+                if result.status == SendStatus.SENT:
+                    narada_core.mark_send_sent(
+                        send_id, result.message_id,
+                        result.thread_id, result.external_id)
+                    narada_core.update_prospect_status(
+                        email, p["id"], "sent")
+                    sent += 1
+                else:
+                    narada_core.mark_send_failed(send_id, result.error)
+                    failed += 1
+            if sent > 0:
+                narada_core.update_campaign_status(email, cid, "sending")
+            return {"kind": "ok",
+                    "msg": f"Sent {sent} ({failed} failed)."}
+
+        if action == "check-replies":
+            sender_slug = camp.get("sender") or ""
+            sender = get_sender(sender_slug)
+            if not sender:
+                return {"kind": "error",
+                        "msg": f"sender {sender_slug!r} not registered"}
+            # Look back 7 days for replies. Sender plugin pulls inbound
+            # via its native channel (Gmail API for gmail plugin, webhook
+            # cache for SaaS senders).
+            from datetime import datetime, timedelta
+            since = datetime.utcnow() - timedelta(days=7)
+            try:
+                replies = sender.detect_replies(email, since=since)
+            except Exception as e:
+                return {"kind": "error",
+                        "msg": f"reply check failed: {type(e).__name__}"}
+            # Match each reply to a send by Message-ID. Simple v1: only
+            # classify replies whose in-reply-to matches a send row.
+            matched = 0
+            from db_helpers import db_read
+            for r in replies:
+                if not r.in_reply_to_message_id:
+                    continue
+                rows = db_read(
+                    "SELECT id FROM globus_narada_sends "
+                    "WHERE member_email=%s AND campaign_id=%s "
+                    "  AND message_id=%s LIMIT 1",
+                    (email, cid, r.in_reply_to_message_id))
+                if rows:
+                    # v1 classification: any reply that isn't auto-out-
+                    # of-office is "interested" until we wire a real
+                    # classifier (v2). Even crude classification helps.
+                    body_lower = (r.body or "").lower()
+                    if "out of office" in body_lower or "auto reply" in body_lower:
+                        cls = "ooo"
+                    elif "unsubscribe" in body_lower or "remove" in body_lower:
+                        cls = "unsubscribe"
+                    else:
+                        cls = "interested"
+                    narada_core.record_reply(
+                        rows[0]["id"], cls, r.body)
+                    matched += 1
+            return {"kind": "ok",
+                    "msg": f"Checked {len(replies)} message(s); "
+                            f"matched {matched} as replies."}
+
+        return {"kind": "error", "msg": f"unknown action: {action}"}
+
     # ---- GET ----
     def do_GET(self):
         parsed = urlparse(self.path)
@@ -449,7 +658,7 @@ class Handler(BaseHTTPRequestHandler):
             deep = bool((qs.get("deep") or [""])[0])
             if not deep:
                 return self._send_json(
-                    200, {"ok": True, "app": "globus", "v": "0.5"})
+                    200, {"ok": True, "app": "globus", "v": "0.6"})
             return self._send_json(*_deep_health())
 
         # Static assets
@@ -612,6 +821,45 @@ class Handler(BaseHTTPRequestHandler):
             return self._redirect(
                 "/members/connect?kind=ok&msg="
                 + quote(f"Connected {account}. First sync started in the background."))
+
+        if route == "/members/narada":
+            qs = parse_qs(parsed.query)
+            return self._send_html(200, narada_dashboard_html(
+                email, narada_core.list_campaigns(email),
+                message=(qs.get("msg") or [""])[0] or None,
+                kind=(qs.get("kind") or [""])[0] or None))
+
+        if route == "/members/narada/credentials":
+            qs = parse_qs(parsed.query)
+            configured = {r["tool"] for r in
+                           narada_creds.list_member_credentials(email)}
+            return self._send_html(200, narada_credentials_html(
+                email, configured,
+                message=(qs.get("msg") or [""])[0] or None,
+                kind=(qs.get("kind") or [""])[0] or None))
+
+        if route == "/members/narada/new":
+            qs = parse_qs(parsed.query)
+            return self._send_html(200, narada_new_campaign_html(
+                email,
+                message=(qs.get("msg") or [""])[0] or None,
+                kind=(qs.get("kind") or [""])[0] or None))
+
+        # Campaign detail — /members/narada/<int>
+        if route.startswith("/members/narada/"):
+            tail = route.removeprefix("/members/narada/").rstrip("/")
+            if tail.isdigit():
+                cid = int(tail)
+                camp = narada_core.get_campaign(email, cid)
+                if not camp:
+                    return self._send_html(404, "<h1>campaign not found</h1>")
+                qs = parse_qs(parsed.query)
+                return self._send_html(200, narada_campaign_detail_html(
+                    email, camp,
+                    narada_core.list_prospects(email, cid),
+                    narada_core.campaign_stats(email, cid),
+                    message=(qs.get("msg") or [""])[0] or None,
+                    kind=(qs.get("kind") or [""])[0] or None))
 
         if route == "/members/whatsapp":
             # Settings page for the Chrome-extension pairing flow.
@@ -845,6 +1093,89 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_json(500,
                         {"error": f"{type(e).__name__}: {e}"})
 
+        # ─────────────────────────────────────────────────────────────
+        # Narada — credential management
+        # ─────────────────────────────────────────────────────────────
+        if route == "/members/narada/credentials/save":
+            form = self._form()
+            tool = (form.get("tool") or "").strip()
+            if not tool:
+                return self._redirect(
+                    "/members/narada/credentials?kind=error&msg="
+                    + quote("tool name required"))
+            # Collect every non-empty field except 'tool' as the
+            # credential dict — plugin determines which keys it needs.
+            cred = {k: v for k, v in form.items()
+                     if k != "tool" and (v or "").strip()}
+            if not cred:
+                return self._redirect(
+                    "/members/narada/credentials?kind=error&msg="
+                    + quote("no credential values supplied"))
+            try:
+                narada_creds.set_credential(email, tool, cred)
+            except Exception as e:
+                return self._redirect(
+                    "/members/narada/credentials?kind=error&msg="
+                    + quote(f"save failed: {type(e).__name__}"))
+            return self._redirect(
+                "/members/narada/credentials?kind=ok&msg="
+                + quote(f"{tool} credentials saved."))
+
+        if route == "/members/narada/credentials/delete":
+            form = self._form()
+            tool = (form.get("tool") or "").strip()
+            if tool:
+                narada_creds.delete_credential(email, tool)
+            return self._redirect(
+                "/members/narada/credentials?kind=ok&msg="
+                + quote(f"{tool or 'credential'} deleted."))
+
+        # ─────────────────────────────────────────────────────────────
+        # Narada — campaign create + state-machine actions
+        # ─────────────────────────────────────────────────────────────
+        if route == "/members/narada/new":
+            form = self._form()
+            name = (form.get("name") or "").strip()
+            if not name:
+                return self._redirect(
+                    "/members/narada/new?kind=error&msg="
+                    + quote("name required"))
+            try:
+                cid = narada_core.create_campaign(
+                    email,
+                    name=name,
+                    product=(form.get("product") or "").strip(),
+                    icp_description=(form.get("icp_description") or "").strip(),
+                    lead_source=(form.get("lead_source") or "").strip(),
+                    verifier=(form.get("verifier") or "").strip(),
+                    sender=(form.get("sender") or "").strip(),
+                    crm=(form.get("crm") or "").strip(),
+                    send_mode=(form.get("send_mode") or "approve_each").strip())
+            except ValueError as e:
+                return self._redirect(
+                    "/members/narada/new?kind=error&msg=" + quote(str(e)))
+            except Exception as e:
+                return self._redirect(
+                    "/members/narada/new?kind=error&msg="
+                    + quote(f"create failed: {type(e).__name__}"))
+            return self._redirect(f"/members/narada/{cid}?kind=ok&msg="
+                                    + quote("Campaign created."))
+
+        # Campaign-detail POST actions — /members/narada/<id>/<action>
+        if route.startswith("/members/narada/"):
+            parts = route.removeprefix("/members/narada/").strip("/").split("/")
+            if len(parts) == 2 and parts[0].isdigit():
+                cid = int(parts[0])
+                action = parts[1]
+                camp = narada_core.get_campaign(email, cid)
+                if not camp:
+                    return self._send_json(404, {"error": "not found"})
+                form = self._form()
+                msg = self._narada_run_action(email, camp, action, form)
+                return self._redirect(
+                    f"/members/narada/{cid}?kind={msg.get('kind','ok')}&msg="
+                    + quote(msg.get("msg", "done")))
+
         if route == "/members/globus/agents/run":
             form = self._form()
             name = (form.get("agent") or "").strip()
@@ -987,7 +1318,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    print(f"globus/0.5 booting on {HOST}:{PORT}", flush=True)
+    print(f"globus/0.6 booting on {HOST}:{PORT}", flush=True)
     print(f"  site:     {SITE}", flush=True)
     print(f"  db:       {DB_CFG['user']}@{DB_CFG['host']}:{DB_CFG['port']}/"
           f"{DB_CFG['database']}", flush=True)

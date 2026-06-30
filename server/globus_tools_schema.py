@@ -306,4 +306,156 @@ GLOBUS_TOOLS = [
             },
         },
     },
+
+    # ─────────────────────────────────────────────────────────────────
+    # Narada — Globus Outbound Agent.
+    # ─────────────────────────────────────────────────────────────────
+    {
+        "type": "function",
+        "function": {
+            "name": "narada_create_campaign",
+            "description": (
+                "Create a new outbound campaign. USE when the member "
+                "asks Narada to 'run a campaign', 'send cold emails to "
+                "X', 'do outreach for product Y'. Returns the campaign_id "
+                "for subsequent calls (find_leads, draft_copy, send)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "product": {"type": "string"},
+                    "icp_description": {"type": "string"},
+                    "lead_source": {"type": "string",
+                        "description": "plugin slug: 'prospeo', 'apollo', etc. Call narada_list_plugins to see available."},
+                    "sender": {"type": "string",
+                        "description": "plugin slug: 'gmail', 'smartlead', etc."},
+                    "verifier": {"type": "string", "description": "OPTIONAL"},
+                    "crm": {"type": "string", "description": "OPTIONAL"},
+                    "send_mode": {"type": "string",
+                        "description": "'approve_each' (default) or 'autopilot'"},
+                },
+                "required": ["name", "product", "icp_description",
+                              "lead_source", "sender"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "narada_find_leads",
+            "description": (
+                "Find prospects matching the campaign's ICP via its "
+                "lead-source plugin. Max 500 per call. Returns counts."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "campaign_id": {"type": "integer"},
+                    "count": {"type": "integer",
+                               "description": "max leads (default 50, max 500)"},
+                },
+                "required": ["campaign_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "narada_draft_copy",
+            "description": (
+                "Generate 3 personalised email variants per verified "
+                "prospect via the LLM. Caps at 20 prospects per call. "
+                "Rerun for more. Member reviews + approves before send."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "campaign_id": {"type": "integer"},
+                },
+                "required": ["campaign_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "narada_send_campaign",
+            "description": (
+                "Fire all APPROVED sends (or DRAFTED in autopilot mode) "
+                "via the campaign's sender plugin. NEVER call this "
+                "without explicit member request — it's irreversible. "
+                "Suppression list + daily caps enforced."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "campaign_id": {"type": "integer"},
+                },
+                "required": ["campaign_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "narada_check_replies",
+            "description": (
+                "Pull recent replies; classify; push hot ones to CRM if "
+                "configured. USE for 'any replies on X campaign?'."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "campaign_id": {"type": "integer"},
+                },
+                "required": ["campaign_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "narada_campaign_stats",
+            "description": (
+                "Live counts for one campaign: prospects/sends/replies "
+                "by status. USE for 'how's X doing?'."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "campaign_id": {"type": "integer"},
+                },
+                "required": ["campaign_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "narada_list_campaigns",
+            "description": (
+                "List member's campaigns (newest first, up to 50)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "status": {"type": "string"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "narada_list_plugins",
+            "description": (
+                "List which Narada plugins are AVAILABLE for this "
+                "member (credentials configured). Per-category lists. "
+                "USE before narada_create_campaign to know valid slugs. "
+                "Point member to /members/narada/credentials to add more."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
 ]

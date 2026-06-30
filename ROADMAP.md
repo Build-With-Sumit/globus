@@ -234,6 +234,80 @@ fleet with `/opt/hermes/bin/run-agent.sh`). The OSS-native runner is
 the default; wire the Hermes adapter into the route handler if you
 prefer that execution model.
 
+## v0.6 (current) — Narada, the Outbound Agent
+
+Globus's first marketer-facing product feature. End-to-end cold-
+outreach platform with a plugin architecture — any tool in the 12
+categories from the PRD plugs in by implementing one of 5 protocols.
+See [`docs/prd/narada-outbound-agent.md`](docs/prd/narada-outbound-agent.md).
+
+### Phase 0 shipped — plugin spine
+
+- ✅ `server/narada_plugins/` package — protocols (LeadSource /
+  Verifier / Sender / CRM / LinkedInChannel), types (dataclasses for
+  Lead, ICPFilters, VerifyResult, SendResult, Reply, …), registry
+  with auto-loader that walks the package and self-registers every
+  plugin.
+- ✅ `server/narada_core.py` — campaign + prospect + send state
+  machine. Suppression check on every queue_send (default-deny).
+  Per-member ownership via WHERE clauses on every read.
+- ✅ `server/narada_creds.py` — per-member, per-tool Fernet-encrypted
+  credential vault. Reuses `GLOBUS_OAUTH_ENCRYPTION_KEY` (one key
+  per install).
+- ✅ `server/narada_copy.py` — LLM-driven 3-variant copy gen with
+  safety-rule system prompt + winning-angle memory + JSON-output
+  parsing + fallback variant on LLM fail.
+- ✅ Schema — 6 new tables: `globus_narada_campaigns / _prospects /
+  _sends / _suppression / _credentials / _angle_memory`.
+
+### Phase 1 shipped — first-wave plugins + UI + LLM tools
+
+- ✅ **Gmail sender** (`narada_plugins/gmail_composio.py`) — sends
+  via member's own Gmail/Workspace through Composio's managed OAuth.
+  Native reply detection via the same connection. ~1500/day cap.
+- ✅ **Prospeo** (`narada_plugins/prospeo.py`) — LeadSource AND
+  Verifier from the same subscription. People search + email find +
+  verify, all 1-credit-per-call.
+- ✅ **Freshsales CRM** (`narada_plugins/freshsales.py`) — upserts
+  contacts + creates deals + logs activities. Per-member subdomain +
+  API key.
+- ✅ **Dashboard** (`server/narada_html.py`) at `/members/narada`:
+  campaign list, credentials manager, campaign builder, campaign
+  detail with state-machine action buttons (find leads / verify /
+  draft / send / check replies).
+- ✅ **8 LLM tools** wired into the chat orchestrator:
+  `narada_create_campaign`, `narada_find_leads`, `narada_draft_copy`,
+  `narada_send_campaign`, `narada_check_replies`,
+  `narada_campaign_stats`, `narada_list_campaigns`,
+  `narada_list_plugins`. `_V03_TOOLS` not-registered set is back to
+  empty.
+- ✅ **Agent catalog entry** — Narada appears at
+  `/members/globus/agents` as a card; "Run now" produces a brief of
+  current campaign state + suggested next moves.
+- ✅ **Members landing tile** — direct link from `/members`.
+
+### Phase 2+ — queued (each plugin ships as you provide API keys)
+
+Remaining plugins from the PRD's top-10 lists, ordered by likely
+unlock first:
+
+- Smartlead, Lemlist, EmailBison, Instantly, Apollo Sequences,
+  Reply.io, Mailshake, custom SMTP — sender expansion
+- Apollo, Hunter, Clay, ZoomInfo, RocketReach, FindyMail —
+  lead source + enrichment expansion
+- NeverBounce, ZeroBounce, MillionVerifier, BriteVerify — verifier
+  expansion
+- HubSpot, Salesforce, Pipedrive, Close, Attio (mostly via Composio
+  — fast to land)
+- Heyreach, Dripify, Expandi, Lemlist (LinkedIn), Phantombuster —
+  LinkedIn outbound (TOS-disclaimer-gated)
+- Smartlead/Lemwarm/Warmup-Inbox warmup plugins
+- WhatsApp (Twilio/Wati/AiSensy/Meta Cloud API)
+- Phone/voice (AirCall/Dialpad/Orum/JustCall)
+
+Each is ~1-2 hours of plugin work once credentials are in. No
+architecture changes after Phase 0 + 1.
+
 ## v1.0 — production-ready
 
 Shipped:

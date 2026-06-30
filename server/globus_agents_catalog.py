@@ -162,6 +162,63 @@ GLOBUS_AGENTS_CATALOG = [
     },
 
     # ─────────────────────────────────────────────────────────────────────
+    # Narada — the Outbound Agent. Drives the full plugin platform at
+    # /members/narada. Run-now produces a brief of current campaign
+    # status + suggested next moves; the actual campaign lifecycle
+    # (create / find leads / draft / send / check replies) is driven
+    # via chat tools or the dashboard, not this catalog entry.
+    # ─────────────────────────────────────────────────────────────────────
+    {
+        "name": "narada",
+        "role": "Narada — Outbound Agent",
+        "summary": (
+            "End-to-end cold outreach. Picks lead sources, drafts "
+            "personalised copy, sends via your chosen mailbox, "
+            "classifies replies, pipes hot ones to your CRM. "
+            "Pluggable across 120+ tools (Prospeo + Gmail + Freshsales "
+            "in v1; Smartlead / Apollo / Lemlist / Hubspot / Heyreach "
+            "and more land as you provide credentials). Full UI at "
+            "/members/narada."),
+        "name_origin": (
+            "Narada Muni is the Mahabharata's celestial messenger — "
+            "the original go-between who plants ideas and connects "
+            "people who'd otherwise never meet. Outbound, basically."),
+        "task_prompt": (
+            "Give me a brief summary of my Narada outbound state right "
+            "now.\n\n"
+            "1. Call narada_list_campaigns to list every campaign.\n"
+            "2. For each non-'done' campaign, call narada_campaign_stats "
+            "to get live prospect/send/reply counts.\n"
+            "3. Call narada_check_replies on any 'sending' campaign to "
+            "pull fresh replies.\n\n"
+            "Output a tight markdown brief: campaign table (name, "
+            "status, sent/replied counts), then any prospects needing "
+            "copy approval, then suggested next moves ('campaign X has "
+            "12 drafts waiting review at /members/narada/X', etc.). "
+            "Be specific; cite numbers; never invent data."
+        ),
+        "schedule": "08:30 daily (cron) — recommended",
+        "data_sources": [
+            "globus_narada_campaigns / _prospects / _sends / _replies "
+            "tables",
+            "Live plugin calls (Gmail reply detection, etc.)",
+        ],
+        "capabilities": ["read", "draft-copy", "send-on-approval"],
+        "can_do": [
+            "Survey all campaigns + surface anything needing attention",
+            "Pull fresh replies via the campaign's sender plugin",
+            "Suggest concrete next moves (links to dashboard pages)",
+            "Run the full ICP→leads→copy→send pipeline via chat tools",
+        ],
+        "cannot_do": [
+            "Send emails autonomously without member trigger",
+            "Modify campaign settings without member request",
+            "Bypass per-member suppression list",
+            "Use credentials another member set up",
+        ],
+    },
+
+    # ─────────────────────────────────────────────────────────────────────
     # Example 3: Infra Watch — health monitor with TG alert capability.
     # ─────────────────────────────────────────────────────────────────────
     {

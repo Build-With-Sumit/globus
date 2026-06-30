@@ -467,6 +467,198 @@ except Exception:
     _TG_BOT_AVAILABLE = False
     _V03_TOOLS = _V03_TOOLS | {"send_telegram_via_bot"}
 
+# Narada (outbound agent) — registers 8 tools if narada_core imports
+# cleanly. Falls back into _V03_TOOLS otherwise so the LLM gets a
+# clear "not available on this install" error rather than crashing.
+_NARADA_TOOL_SLUGS = {
+    "narada_create_campaign", "narada_find_leads", "narada_draft_copy",
+    "narada_send_campaign", "narada_check_replies",
+    "narada_campaign_stats", "narada_list_campaigns",
+    "narada_list_plugins",
+}
+try:
+    import narada_core
+    import narada_plugins
+    from narada_plugins.types import ICPFilters, SendStatus, VerifyStatus
+    _NARADA_AVAILABLE = True
+except Exception:
+    _NARADA_AVAILABLE = False
+    _V03_TOOLS = _V03_TOOLS | _NARADA_TOOL_SLUGS
+
+
+def _dispatch_narada(name, email, inp):
+    """Dispatch a Narada LLM tool call. Returns dict the loop hands back
+    to the LLM as the tool result. Never raises — every failure becomes
+    {"ok": False, "error": "..."} so the LLM can recover or apologise."""
+    try:
+        if name == "narada_list_plugins":
+            avail = {}
+            for cat in ("LEAD_SOURCE", "VERIFIER", "SENDER",
+                         "CRM", "LINKEDIN"):
+                pcat = getattr(narada_plugins.PluginCategory, cat)
+                avail[cat.lower()] = [
+                    {"slug": p.info().name,
+                     "display_name": p.info().display_name}
+                    for p in narada_plugins.list_available_for_member(
+                        pcat, email)]
+            return {"ok": True, "available": avail}
+
+        if name == "narada_list_campaigns":
+            return {"ok": True, "campaigns":
+                    narada_core.list_campaigns(
+                        email, status=inp.get("status"))}
+
+        if name == "narada_create_campaign":
+            cid = narada_core.create_campaign(
+                email,
+                name=(inp.get("name") or "").strip(),
+                product=(inp.get("product") or "").strip(),
+                icp_description=(inp.get("icp_description") or "").strip(),
+                lead_source=(inp.get("lead_source") or "").strip(),
+                verifier=(inp.get("verifier") or "").strip(),
+                sender=(inp.get("sender") or "").strip(),
+                crm=(inp.get("crm") or "").strip(),
+                send_mode=(inp.get("send_mode")
+                            or "approve_each").strip())
+            return {"ok": True, "campaign_id": cid,
+                    "url": f"/members/narada/{cid}"}
+
+        if name == "narada_find_leads":
+            cid = int(inp.get("campaign_id"))
+            count = max(1, min(int(inp.get("count") or 50), 500))
+            camp = narada_core.get_campaign(email, cid)
+            if not camp:
+                return {"ok": False, "error": f"campaign {cid} not found"}
+            ls = narada_plugins.get_lead_source(
+                camp.get("lead_source") or "")
+            if not ls:
+                return {"ok": False,
+                        "error": f"lead source {camp.get('lead_source')!r} "
+                                  "not registered or not configured"}
+            icp = ICPFilters(keywords=[
+                (camp.get("icp_description") or "")[:500]])
+            leads = ls.search(email, icp, count=count)
+            res = narada_core.add_prospects(email, cid, leads)
+            return {"ok": True, "found": len(leads), **res}
+
+        if name == "narada_draft_copy":
+            from narada_copy import draft_copy_for_prospect
+            cid = int(inp.get("campaign_id"))
+            camp = narada_core.get_campaign(email, cid)
+            if not camp:
+                return {"ok": False, "error": f"campaign {cid} not found"}
+            prospects = [p for p in
+                          narada_core.list_prospects(email, cid)
+                          if p["status"] in ("new", "verified", "enriched")]
+            drafted = 0
+            for p in prospects[:20]:
+                variants = draft_copy_for_prospect(
+                    member_email=email,
+                    product=camp.get("product") or "",
+                    prospect=p,
+                    campaign_icp_description=camp.get(
+                        "icp_description") or "")
+                if variants:
+                    narada_core.set_prospect_copy(email, p["id"], variants)
+                    drafted += 1
+            return {"ok": True, "drafted": drafted,
+                    "remaining": max(0, len(prospects) - 20)}
+
+        if name == "narada_send_campaign":
+            cid = int(inp.get("campaign_id"))
+            camp = narada_core.get_campaign(email, cid)
+            if not camp:
+                return {"ok": False, "error": f"campaign {cid} not found"}
+            sender = narada_plugins.get_sender(camp.get("sender") or "")
+            if not sender or not sender.is_available(email):
+                return {"ok": False,
+                        "error": f"sender {camp.get('sender')!r} "
+                                  "not registered or not configured"}
+            target_status = ("drafted"
+                              if camp.get("send_mode") == "autopilot"
+                              else "approved")
+            prospects = narada_core.list_prospects(
+                email, cid, status=target_status)
+            from_addr = (camp.get("sender_config") or {}).get(
+                "from_addr") if isinstance(camp.get("sender_config"),
+                                            dict) else None
+            if not from_addr:
+                from_addr = email
+            sent = failed = 0
+            for p in prospects[:sender.daily_send_cap(email)]:
+                variants = p.get("copy_variants") or []
+                if isinstance(variants, str):
+                    try: variants = json.loads(variants)
+                    except Exception: variants = []
+                idx = p.get("approved_variant_idx")
+                if idx is None and camp.get("send_mode") == "autopilot":
+                    idx = 0
+                if idx is None or not (0 <= idx < len(variants)):
+                    continue
+                v = variants[idx]
+                sid = narada_core.queue_send(
+                    email, cid, p["id"], from_addr=from_addr,
+                    subject=v.get("subject") or "",
+                    body=v.get("body") or "",
+                    sender_slug=camp.get("sender") or "")
+                if not sid:
+                    continue
+                result = sender.send(
+                    member_email=email, from_addr=from_addr,
+                    to=p["email"], subject=v.get("subject") or "",
+                    body=v.get("body") or "")
+                if result.status == SendStatus.SENT:
+                    narada_core.mark_send_sent(
+                        sid, result.message_id, result.thread_id,
+                        result.external_id)
+                    narada_core.update_prospect_status(email, p["id"], "sent")
+                    sent += 1
+                else:
+                    narada_core.mark_send_failed(sid, result.error)
+                    failed += 1
+            if sent > 0:
+                narada_core.update_campaign_status(email, cid, "sending")
+            return {"ok": True, "sent": sent, "failed": failed}
+
+        if name == "narada_check_replies":
+            cid = int(inp.get("campaign_id"))
+            camp = narada_core.get_campaign(email, cid)
+            if not camp:
+                return {"ok": False, "error": f"campaign {cid} not found"}
+            sender = narada_plugins.get_sender(camp.get("sender") or "")
+            if not sender:
+                return {"ok": False, "error": "sender not registered"}
+            from datetime import datetime, timedelta
+            replies = sender.detect_replies(
+                email, since=datetime.utcnow() - timedelta(days=7))
+            matched = 0
+            for r in replies:
+                if not r.in_reply_to_message_id:
+                    continue
+                rows = db_read(
+                    "SELECT id FROM globus_narada_sends WHERE "
+                    "member_email=%s AND campaign_id=%s AND message_id=%s "
+                    "LIMIT 1",
+                    (email, cid, r.in_reply_to_message_id))
+                if rows:
+                    lower = (r.body or "").lower()
+                    cls = ("ooo" if "out of office" in lower
+                           else "unsubscribe" if "unsubscribe" in lower
+                           else "interested")
+                    narada_core.record_reply(rows[0]["id"], cls, r.body)
+                    matched += 1
+            return {"ok": True, "checked": len(replies), "matched": matched}
+
+        if name == "narada_campaign_stats":
+            cid = int(inp.get("campaign_id"))
+            stats = narada_core.campaign_stats(email, cid)
+            return {"ok": True, "stats": stats}
+
+        return {"ok": False, "error": f"unknown narada tool: {name}"}
+    except Exception as e:
+        return {"ok": False,
+                "error": f"{type(e).__name__}: {e}"}
+
 
 def _run_tools_loop(system, msgs, email, max_tokens=2000,
                    log_prefix="globus-chat", max_iterations=None,
@@ -599,6 +791,9 @@ def _run_tools_loop(system, msgs, email, max_tokens=2000,
                         reply_to_message_id=inp.get("reply_to_message_id"),
                         parse_mode=inp.get("parse_mode"),
                         initiator=log_prefix)
+                    iter_non_search_calls += 1
+                elif name in _NARADA_TOOL_SLUGS and _NARADA_AVAILABLE:
+                    result = _dispatch_narada(name, email, inp)
                     iter_non_search_calls += 1
                 elif name in _V03_TOOLS:
                     result = {"error": f"tool {name!r} not wired in v0.2 — "
