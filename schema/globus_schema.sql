@@ -335,6 +335,28 @@ CREATE TABLE IF NOT EXISTS globus_agent_schedules (
   UNIQUE KEY uniq_email_agent (member_email, agent_name)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- Composio integration — one row per (member, app) that the member
+-- has connected via Composio's managed OAuth. Stores the
+-- connected_account_id Composio gives us back; the actual OAuth
+-- tokens never touch our DB (Composio holds them server-side).
+CREATE TABLE IF NOT EXISTS globus_composio_connections (
+  id                        BIGINT AUTO_INCREMENT PRIMARY KEY,
+  member_email              VARCHAR(320) NOT NULL,
+  app                       VARCHAR(80) NOT NULL,         -- e.g. 'googlecalendar', 'github'
+  composio_user_id          VARCHAR(255) NOT NULL,        -- what we pass to composio.create(user_id=...)
+  composio_connection_id    VARCHAR(255),                 -- ConnectionRequest.id from link()
+  composio_account_id       VARCHAR(255),                 -- connected_account.id after wait_for_connection
+  status                    ENUM('pending','active','expired','revoked')
+                            NOT NULL DEFAULT 'pending',
+  last_error                TEXT,
+  connected_at              TIMESTAMP NULL,
+  created_at                TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at                TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                            ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uniq_member_app (member_email, app),
+  KEY ix_status (status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 -- Public preview chat — audit log for anonymous /api/public/chat hits.
 -- ip + day rate-limit lives here too (count(*) GROUP BY ip + WHERE
 -- created_at > NOW() - INTERVAL 1 DAY). Truncate periodically if it

@@ -1,3 +1,8 @@
 # Globus — runtime dependencies. Minimal on purpose.
 PyMySQL>=1.0
 cryptography>=42.0          # Fernet encryption for OAuth refresh tokens
+
+# Optional — pulled in only when the Composio integration is wired
+# (COMPOSIO_API_KEY set in DB config). Safe to omit on installs that
+# don't use the Calendar / GitHub / Notion / Slack tool surface.
+composio>=0.7,<1            # third-party tool catalog + managed OAuth
