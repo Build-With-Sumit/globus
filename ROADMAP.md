@@ -236,8 +236,22 @@ prefer that execution model.
 
 ## v1.0 — production-ready
 
-- [ ] **Docker compose** — `docker-compose up` gets you a working
-  Globus + MySQL + Claude OAuth proxy in one command.
+Shipped:
+
+- ✅ **Docker compose** (v1.0a) — `docker compose up` gets you a
+  working Globus + MySQL in one command. Single-stage
+  `python:3.12-slim` image, non-root user, named volumes for state,
+  healthchecks, entrypoint handles wait-for-db + idempotent schema
+  apply + SESSION_SECRET bootstrap + optional first-member seed.
+- ✅ **`send_telegram_via_bot` LLM tool** (v1.0b) — closes the last
+  gap in the tool dispatch chain. Member adds a TG bot via SQL
+  (Fernet-encrypted token + allow-list of permitted chat_ids); LLM
+  can post on member's behalf with default-deny on the allow-list +
+  full audit in `globus_telegram_bot_sends`. `_V03_TOOLS` not-registered
+  set is now empty (was previously holding 3 tools).
+
+Still ahead:
+
 - [ ] **Migration framework** — proper versioned schema migrations
   instead of "re-run the .sql, it's idempotent" pattern.
 - [ ] **Plugin architecture** — pip-installable extensions for
@@ -245,10 +259,13 @@ prefer that execution model.
   buildwithsumit reference docs).
 - [ ] **Voice cost rebuild** — ElevenLabs is fine for v0.4 but rough on
   margin at scale. Migrate to Cartesia (TTS) + Deepgram (STT) +
-  optional LiveKit (transport). This is also the buildwithsumit prod
-  roadmap.
+  optional LiveKit (transport).
 - [ ] **First-class public preview** — bring `public_globus_html` to a
   usable end-to-end demo with an allow-list / rate-limit story.
+- [ ] **Telegram bot setup UI** — currently `send_telegram_via_bot`
+  requires the bot row inserted via SQL. A `/members/telegram/bot`
+  form (with `botfather` token field + chat_id allow-list editor)
+  is small follow-on work.
 
 ## Contributing
 

@@ -443,12 +443,13 @@ def mark_chat_resolved(email, chat_name_fragment):
 
 # Tools we DON'T register in v0.2 — the LLM will see "unknown tool" if
 # it tries to call them. Wired up in v0.3.
-# Tools the schema advertises but the OSS install hasn't wired yet. v0.3b
-# registers list_recent_emails when Gmail sync imports, v0.5 registers
-# run_agent when agent_runner imports. send_telegram_via_bot is the last
-# v0.3c+ piece (Telegram BOT API; the bridge-extension ingest side is
-# already shipped, this is the WRITE path).
-_V03_TOOLS = {"send_telegram_via_bot"}
+# Tools the schema advertises but the OSS install hasn't wired yet.
+# Modules that don't import cleanly (missing cryptography, missing
+# OAuth client config, etc.) drop their tool into this not-registered
+# set so the LLM gets a clear error instead of a crash. v1.0+: every
+# tool has a working wiring; this set is only populated if an import
+# at boot fails.
+_V03_TOOLS = set()
 if not _GMAIL_AVAILABLE:
     _V03_TOOLS = _V03_TOOLS | {"list_recent_emails"}
 
@@ -458,6 +459,13 @@ try:
 except Exception:
     _AGENTS_AVAILABLE = False
     _V03_TOOLS = _V03_TOOLS | {"run_agent"}
+
+try:
+    from telegram_bot import send_via_member_bot
+    _TG_BOT_AVAILABLE = True
+except Exception:
+    _TG_BOT_AVAILABLE = False
+    _V03_TOOLS = _V03_TOOLS | {"send_telegram_via_bot"}
 
 
 def _run_tools_loop(system, msgs, email, max_tokens=2000,
@@ -582,6 +590,15 @@ def _run_tools_loop(system, msgs, email, max_tokens=2000,
                 elif name == "run_agent" and _AGENTS_AVAILABLE:
                     result = agent_run_async(
                         (inp.get("agent") or "").strip(), email)
+                    iter_non_search_calls += 1
+                elif name == "send_telegram_via_bot" and _TG_BOT_AVAILABLE:
+                    result = send_via_member_bot(
+                        email,
+                        chat_id=inp.get("chat_id"),
+                        text=(inp.get("text") or "").strip(),
+                        reply_to_message_id=inp.get("reply_to_message_id"),
+                        parse_mode=inp.get("parse_mode"),
+                        initiator=log_prefix)
                     iter_non_search_calls += 1
                 elif name in _V03_TOOLS:
                     result = {"error": f"tool {name!r} not wired in v0.2 — "
