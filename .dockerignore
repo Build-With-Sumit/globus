@@ -1,0 +1,41 @@
+# Globus — .dockerignore. Keeps the build context small + keeps
+# secrets out of the image. Pattern semantics match .gitignore.
+
+# Git + IDE
+.git/
+.gitignore
+.gitattributes
+.vscode/
+.idea/
+*.swp
+
+# Python build artefacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local secrets — NEVER bake into an image
+.env
+.env.*
+!.env.example
+config/persona.md
+config/*.local.*
+
+# Local scratch / logs / test outputs
+*.log
+/tmp/
+
+# Docs and project meta the runtime doesn't need
+# (kept for now — docs/voice-setup.md is linked from the chat page;
+# pull this in if you want a smaller image)
+# docs/
+# *.md

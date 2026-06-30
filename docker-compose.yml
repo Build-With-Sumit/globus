@@ -1,0 +1,95 @@
+# Globus — `docker compose up` brings up a working install on any
+# Docker host. Two services: MySQL + the Globus app. The MySQL data
+# and the Globus state (agent briefs, Drive cache) persist across
+# `docker compose down` via named volumes.
+#
+# First boot:
+#   cp config/.env.example .env       # edit DB_PASSWORD + email + LLM keys
+#   docker compose up -d
+#   docker compose logs -f globus     # watch entrypoint apply schema
+#
+# Make yourself a member (the OTP login won't let you in otherwise):
+#   docker compose exec db mysql -ulibrary -p$DB_PASSWORD globus \
+#     -e "INSERT INTO members (email, status) VALUES ('you@example.com','active');"
+#
+# Then visit http://localhost:8090/members/login and check the
+# `globus` container logs for the dev-fallback OTP code (no email
+# provider configured by default).
+
+services:
+  db:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-change-me-root}
+      MYSQL_DATABASE: ${DB_NAME:-globus}
+      MYSQL_USER: ${DB_USER:-globus}
+      MYSQL_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD must be set in .env}
+    command: >
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_unicode_ci
+      --sql-mode=STRICT_TRANS_TABLES,NO_ZERO_DATE,NO_ZERO_IN_DATE,ERROR_FOR_DIVISION_BY_ZERO
+    volumes:
+      - db_data:/var/lib/mysql
+    # Healthcheck so `globus` only starts once the DB will accept
+    # connections. Without this the entrypoint's wait-for-db loop
+    # still works but logs a few "connection refused" cycles first.
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h127.0.0.1 -u root -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 30s
+    networks: [globus_net]
+
+  globus:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: globus:0.5
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env
+    # Override env_file values for the in-network DB hostname. .env is
+    # the source of truth for password + LLM keys + OAuth client IDs;
+    # the connection target is always `db` inside compose.
+    environment:
+      DB_HOST: db
+      DB_PORT: 3306
+      GLOBUS_HOST: 0.0.0.0
+      GLOBUS_PORT: 8090
+    ports:
+      - "${GLOBUS_PORT_EXPOSED:-8090}:8090"
+    volumes:
+      - agent_briefs:/var/lib/globus/agents
+      - drive_cache:/var/lib/globus/raw-data
+      - globus_state:/app/.state
+      # Mount the persona file from the host so members can edit it
+      # without rebuilding the image. Falls back to persona.example.md
+      # inside the image if config/persona.md isn't present.
+      - ./config:/app/config:ro
+    networks: [globus_net]
+
+  # Optional: claude OAuth proxy. Uncomment if you have Claude Max +
+  # want zero-per-token LLM cost. See docs/claude-oauth-proxy.md.
+  # claude-proxy:
+  #   image: ghcr.io/dnakov/claude-oauth-proxy:latest
+  #   restart: unless-stopped
+  #   environment:
+  #     CLAUDE_SESSION_KEY: ${CLAUDE_SESSION_KEY:?set CLAUDE_SESSION_KEY for claude-oauth provider}
+  #   networks: [globus_net]
+  #   # Then in .env: GLOBUS_LLM_PROVIDER=claude-oauth and
+  #   # CLAUDE_PROXY_URL=http://claude-proxy:8787
+
+volumes:
+  db_data:
+  agent_briefs:
+  drive_cache:
+  globus_state:
+
+networks:
+  globus_net:
+    driver: bridge

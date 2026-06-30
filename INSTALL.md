@@ -11,9 +11,9 @@
 
 ## What you'll need
 
-- **Ubuntu 22.04 or 24.04** (any Linux works; that's just what's tested)
-- **Python 3.10+**, **MySQL 8**, **nginx** (for TLS + reverse proxy in
-  prod — optional for local dev)
+- **Docker + Docker Compose** (the fast path; see § Quick start below).
+- OR for a manual install: **Ubuntu 22.04+**, **Python 3.10+**, **MySQL 8**,
+  **nginx** (for TLS + reverse proxy in prod — optional for local dev).
 - **An LLM** — one of:
   - A **Claude Max subscription** + the [OAuth proxy](docs/claude-oauth-proxy.md)
     (recommended — zero per-token spend)
@@ -22,6 +22,59 @@
 - **Optional sources** — Google OAuth client (Drive + Gmail), Microsoft
   Graph OAuth (Teams), Telethon API credentials (Telegram), an
   ElevenLabs Conversational AI agent (voice).
+
+## Quick start (Docker — recommended)
+
+Five commands and you have a working Globus on `http://localhost:8090`:
+
+```bash
+git clone https://github.com/Build-With-Sumit/globus.git
+cd globus
+
+cp config/.env.example .env
+$EDITOR .env       # at minimum: set DB_PASSWORD + GLOBUS_FIRST_MEMBER_EMAIL
+                   # (the rest can stay at defaults for local testing)
+
+docker compose up -d
+```
+
+What the entrypoint does on first boot:
+1. Waits for MySQL to accept connections.
+2. Applies `schema/globus_schema.sql` (idempotent).
+3. Generates `SESSION_SECRET` if you didn't supply one, persists to a
+   named volume so restarts keep the same secret.
+4. Seeds `GLOBUS_FIRST_MEMBER_EMAIL` as an active member if set.
+5. Starts the Python server on `:8090`.
+
+Then sign in:
+
+```bash
+open http://localhost:8090/members/login
+docker compose logs -f globus | grep "OTP code for"
+# pastes a 6-digit code from the dev-mode stderr fallback — no
+# SendGrid/SMTP needed for local testing
+```
+
+Common ops:
+
+```bash
+docker compose logs -f globus       # follow app log
+docker compose exec globus bash     # shell inside the container
+docker compose exec db mysql -uglobus -p$DB_PASSWORD globus  # SQL prompt
+docker compose down                 # stop (state persists in volumes)
+docker compose down -v              # nuke everything including volumes
+```
+
+The image is `python:3.12-slim` + ~120 MB of dependencies (PyMySQL +
+cryptography + tini + mysql-client). State persists in three named
+volumes: `db_data` (MySQL), `agent_briefs`
+(`/var/lib/globus/agents`), `drive_cache` (`/var/lib/globus/raw-data`).
+
+For voice + OAuth providers, follow §§ "Google OAuth" / "ElevenLabs"
+in the [Bootstrap config](#3-bootstrap-config) section below — those
+env vars work identically in Docker (set in `.env`).
+
+If you'd rather not use Docker, skip to § 1 below.
 
 ## 1. Clone + Python env
 
