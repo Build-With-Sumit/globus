@@ -252,6 +252,12 @@ Shipped:
 
 Still ahead:
 
+- ✅ **Operator quality-of-life** (v1.0d) — `scripts/add_member.py`
+  (CLI member creation, no SQL needed), `scripts/check_install.py`
+  (pre-flight validator with colour OK/WARN/FAIL output), and a
+  deep-mode `GET /api/health?deep=1` JSON endpoint with per-subsystem
+  ok/error status (DB / storage / Fernet / persona / LLM provider).
+  The shallow `/api/health` stays cheap for load balancer probes.
 - [ ] **Migration framework** — proper versioned schema migrations
   instead of "re-run the .sql, it's idempotent" pattern.
 - [ ] **Plugin architecture** — pip-installable extensions for

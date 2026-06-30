@@ -280,6 +280,88 @@ def _members_landing(email):
 
 
 # ─────────────────────────────────────────────────────────────────────
+# Deep health probe — invoked by GET /api/health?deep=1. Each check
+# returns ok/error individually so the operator can see which piece
+# of the install is broken. Returns (http_status, body_dict).
+# ─────────────────────────────────────────────────────────────────────
+
+def _deep_health():
+    checks = {}
+    overall_ok = True
+
+    # DB ping
+    try:
+        rows = db_read("SELECT 1 AS one")
+        checks["db"] = {
+            "ok": bool(rows and rows[0].get("one") == 1),
+            "host": DB_CFG["host"], "database": DB_CFG["database"]}
+    except Exception as e:
+        checks["db"] = {"ok": False,
+                         "error": f"{type(e).__name__}: {e}"[:200]}
+        overall_ok = False
+
+    # Storage probe — confirm we can write to the agent + raw-data dirs.
+    for name, env_key, default_path in [
+        ("agents_dir", "GLOBUS_AGENTS_WORK_DIR", "/var/lib/globus/agents"),
+        ("raw_data_dir", "GLOBUS_RAW_DATA_DIR", "/var/lib/globus/raw-data"),
+    ]:
+        path = os.environ.get(env_key, default_path)
+        probe = os.path.join(path, ".health_probe")
+        try:
+            os.makedirs(path, exist_ok=True)
+            with open(probe, "w") as f:
+                f.write("ok")
+            os.remove(probe)
+            checks[name] = {"ok": True, "path": path}
+        except Exception as e:
+            checks[name] = {"ok": False, "path": path,
+                             "error": f"{type(e).__name__}: {e}"[:200]}
+            overall_ok = False
+
+    # Fernet sanity — encrypt + decrypt a known string to verify the
+    # GLOBUS_OAUTH_ENCRYPTION_KEY config is set and parseable. Skipped
+    # if the install hasn't enabled OAuth (no key configured).
+    try:
+        if cfg("GLOBUS_OAUTH_ENCRYPTION_KEY", ""):
+            from oauth_db import encrypt_token, decrypt_token
+            r = decrypt_token(encrypt_token("health-probe"))
+            checks["fernet"] = {"ok": r == "health-probe"}
+        else:
+            checks["fernet"] = {"ok": True,
+                                 "skipped": "no GLOBUS_OAUTH_ENCRYPTION_KEY"}
+    except Exception as e:
+        checks["fernet"] = {"ok": False,
+                             "error": f"{type(e).__name__}: {e}"[:200]}
+        overall_ok = False
+
+    # Persona file — warn (but don't fail) if running on the example.
+    persona_path = os.path.join(_REPO_ROOT, "config", "persona.md")
+    if os.path.isfile(persona_path):
+        checks["persona"] = {"ok": True, "source": "config/persona.md"}
+    elif os.path.isfile(os.path.join(_REPO_ROOT, "config",
+                                       "persona.example.md")):
+        checks["persona"] = {"ok": True,
+                              "source": "config/persona.example.md",
+                              "warning": "copy persona.example.md to "
+                                          "persona.md and customise"}
+    else:
+        checks["persona"] = {"ok": False,
+                              "error": "no persona file found"}
+        overall_ok = False
+
+    # LLM provider — just report what's configured. Don't ping the
+    # provider (could be costly + slow).
+    checks["llm"] = {"ok": True,
+                      "provider": cfg("GLOBUS_LLM_PROVIDER",
+                                       "claude-oauth")}
+
+    return (200 if overall_ok else 503), {
+        "ok": overall_ok, "app": "globus", "v": "0.5",
+        "checks": checks,
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────
 # 5. HTTP handler
 # ─────────────────────────────────────────────────────────────────────
 
@@ -350,8 +432,15 @@ class Handler(BaseHTTPRequestHandler):
             return self._send_html(200, public_globus_landing_html())
 
         if route == "/api/health":
-            return self._send_json(200,
-                                    {"ok": True, "app": "globus", "v": "0.5"})
+            # Cheap by default — used by Docker HEALTHCHECK + load
+            # balancers. `?deep=1` runs a full DB ping + storage probe
+            # + Fernet sanity + persona check (slower; use for ops).
+            qs = parse_qs(parsed.query)
+            deep = bool((qs.get("deep") or [""])[0])
+            if not deep:
+                return self._send_json(
+                    200, {"ok": True, "app": "globus", "v": "0.5"})
+            return self._send_json(*_deep_health())
 
         # Static assets
         if route in ("/favicon.svg", "/styles.css", "/main.js"):

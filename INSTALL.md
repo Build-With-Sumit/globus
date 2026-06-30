@@ -247,15 +247,42 @@ sudo systemctl status globus.service
 ## 8. First member
 
 ```bash
-mysql -u globus -p globus <<EOF
-INSERT INTO members (email, first_name, status)
-VALUES ('you@example.com', 'You', 'active');
-EOF
+# Easiest path — CLI, no SQL:
+python3 scripts/add_member.py you@example.com --name="Your Name"
+
+# Equivalent SQL if you prefer:
+mysql -u globus -p globus -e \
+  "INSERT INTO members (email, first_name, status) \
+   VALUES ('you@example.com', 'You', 'active');"
 ```
 
 Then visit `/members/login` and request an OTP code. The default
 sender uses `EMAIL_API_KEY` (SendGrid by default — swap to any SMTP
-sender by editing `server/members_auth_html.py`).
+sender by editing `server/members_auth_html.py`). If `EMAIL_API_KEY`
+isn't set, the OTP code is logged to stderr — fine for local dev.
+
+## Pre-flight check
+
+Before starting the server (or after any config / schema change),
+run:
+
+```bash
+python3 scripts/check_install.py
+```
+
+It validates: `.env` loads, required env vars set, DB reachable,
+expected tables present, storage paths writable, Fernet key
+round-trips, persona file present, at least one active member.
+Prints OK / WARN / FAIL per check with colour, exits 1 on any
+fatal failure.
+
+Equivalent live probe — once the server is running:
+
+```bash
+curl http://localhost:8090/api/health?deep=1
+# Returns JSON with per-subsystem ok/error status. The shallow
+# /api/health (no ?deep=1) stays cheap for load balancer probes.
+```
 
 ## Troubleshooting
 
