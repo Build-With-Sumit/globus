@@ -13,8 +13,9 @@ from __future__ import annotations
 import json
 import re
 
-from db_helpers import db_read
+from db_helpers import db_read, db_write
 from globus_llm import globus_call_chat
+from narada_plugins.types import ICPFilters
 
 
 # Char budget per generated email body — long enough to be a real
@@ -22,6 +23,115 @@ from globus_llm import globus_call_chat
 # tokens (Hi {name} → "Hi Sumit") are inside this budget.
 COPY_BODY_MAX_CHARS = 1500
 COPY_SUBJECT_MAX_CHARS = 120
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Free-text ICP → structured ICPFilters. Lead-source plugins need
+# STRUCTURED filters (roles/seniority/locations/…), not one keyword blob,
+# or they return nothing. LLM-parse the campaign's free-text
+# icp_description and cache the result on the campaign row.
+# ─────────────────────────────────────────────────────────────────────
+
+def _icp_from_dict(d: dict) -> ICPFilters:
+    """Build an ICPFilters from a parsed dict (LLM output or cached json)."""
+    def _l(k):
+        v = d.get(k)
+        return [str(x) for x in v if str(x).strip()] if isinstance(v, list) \
+            else []
+
+    def _i(k):
+        try:
+            return int(d.get(k) or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    return ICPFilters(
+        industries=_l("industries"), roles=_l("roles"),
+        seniority=_l("seniority"), locations=_l("locations"),
+        company_size_min=_i("company_size_min"),
+        company_size_max=_i("company_size_max"),
+        company_funding_stage=_l("company_funding_stage"),
+        technologies=_l("technologies"), keywords=_l("keywords"),
+        raw=(d.get("raw") if isinstance(d.get("raw"), dict) else {}))
+
+
+_ICP_SYSTEM = (
+    "You extract a structured B2B ICP (ideal customer profile) from a free-"
+    "text description, for lead-search APIs like Apollo and RocketReach. "
+    "Return ONLY a JSON object (no prose, no code fences) with these keys:\n"
+    '  roles: array of job titles to target, e.g. ["CMO","VP Marketing",'
+    '"Head of Marketing","Marketing Director"]\n'
+    '  seniority: array using EXACTLY these allowed values: ["owner",'
+    '"founder","c_suite","partner","vp","head","director","manager",'
+    '"senior","entry","intern"]\n'
+    '  locations: array of countries / regions / cities, e.g. ["United '
+    'States","United Kingdom"]\n'
+    '  industries: array of industries, e.g. ["SaaS","Fintech"]\n'
+    "  technologies: array of tools the target likely uses (intent signals)\n"
+    "  keywords: array of any free-text signals not captured above\n"
+    "  company_size_min: integer employee count (0 if unspecified)\n"
+    "  company_size_max: integer (0 = no max)\n"
+    "Expand role synonyms sensibly (a 'marketing lead' implies CMO, VP "
+    "Marketing, Head of Marketing, Marketing Director, Marketing Manager). "
+    "Use empty arrays for anything the text doesn't specify. Max 12 items "
+    "per array.")
+
+
+def _parse_icp_llm(desc: str, product: str) -> dict:
+    """LLM-parse a free-text ICP into a structured dict. Falls back to
+    {'keywords': [desc]} on any failure so find-leads never breaks."""
+    fallback = {"keywords": [desc[:500]]} if desc else {}
+    try:
+        resp = globus_call_chat(
+            system=_ICP_SYSTEM,
+            messages=[{"role": "user",
+                       "content": f"Product being sold: {product}\n\n"
+                                  f"ICP description:\n{desc}"}],
+            max_tokens=700)
+        text = (((resp.get("choices") or [{}])[0].get("message") or {})
+                .get("content") or "").strip()
+    except Exception as e:
+        print(f"[narada/icp] parse failed: {type(e).__name__}: {e}", flush=True)
+        return fallback
+    if text.startswith("```"):
+        text = text.strip("`")
+        if text[:4].lower() == "json":
+            text = text[4:]
+    try:
+        i, j = text.index("{"), text.rindex("}")
+        d = json.loads(text[i:j + 1])
+    except (ValueError, json.JSONDecodeError):
+        return fallback
+    return d if isinstance(d, dict) else fallback
+
+
+def build_icp(camp: dict) -> ICPFilters:
+    """Structured ICPFilters for a campaign. Uses the campaign's cached
+    parsed filters if present; otherwise LLM-parses icp_description and
+    caches the result back onto the campaign row. Used by both find-leads
+    paths (LLM tool + campaign-detail action)."""
+    stored = camp.get("icp_filters")
+    if isinstance(stored, str):
+        try:
+            stored = json.loads(stored)
+        except Exception:
+            stored = None
+    if isinstance(stored, dict) and any(
+            stored.get(k) for k in
+            ("roles", "seniority", "locations", "industries", "keywords")):
+        return _icp_from_dict(stored)
+    desc = (camp.get("icp_description") or "").strip()
+    if not desc:
+        return ICPFilters()
+    parsed = _parse_icp_llm(desc, (camp.get("product") or "").strip())
+    try:
+        db_write("UPDATE globus_narada_campaigns SET icp_filters=%s "
+                 "WHERE id=%s AND member_email=%s",
+                 (json.dumps(parsed), int(camp["id"]),
+                  camp.get("member_email")))
+    except Exception:
+        pass
+    return _icp_from_dict(parsed)
 
 
 # ─────────────────────────────────────────────────────────────────────

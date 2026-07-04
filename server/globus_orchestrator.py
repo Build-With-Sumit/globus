@@ -35,6 +35,7 @@ import sys
 from db_helpers import db_read, db_write
 from globus_llm import globus_call_chat
 from globus_tools_schema import GLOBUS_TOOLS
+import globus_web_read  # keyless web+social reader (pure module)
 from globus_vault_db import (
     globus_get_vault, globus_messages, globus_log_message,
 )
@@ -535,8 +536,8 @@ def _dispatch_narada(name, email, inp):
                 return {"ok": False,
                         "error": f"lead source {camp.get('lead_source')!r} "
                                   "not registered or not configured"}
-            icp = ICPFilters(keywords=[
-                (camp.get("icp_description") or "")[:500]])
+            from narada_copy import build_icp
+            icp = build_icp(camp)
             leads = ls.search(email, icp, count=count)
             res = narada_core.add_prospects(email, cid, leads)
             return {"ok": True, "found": len(leads), **res}
@@ -732,6 +733,9 @@ def _run_tools_loop(system, msgs, email, max_tokens=2000,
                         iter_empty_searches += 1
                 elif name == "read_file":
                     result = globus_read_file(email, inp.get("file_id"))
+                    iter_non_search_calls += 1
+                elif name == "web_read":
+                    result = globus_web_read.web_read(inp.get("url", ""))
                     iter_non_search_calls += 1
                 elif name == "search_whatsapp":
                     result = globus_search_whatsapp(

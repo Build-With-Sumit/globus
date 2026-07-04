@@ -15,6 +15,7 @@ import json
 from html_chrome import esc, _members_shell
 from narada_plugins import list_plugins, list_available_for_member
 from narada_plugins.types import AuthMethod, PluginCategory
+from narada_platform_catalog import NARADA_PLATFORM_CATALOG
 
 
 def _banner(message, kind):
@@ -190,6 +191,65 @@ def narada_credentials_html(email, configured_tools,
             f'</h2>'
             + "".join(cards))
 
+    # ── Full platform catalog — every planned integration, so ANY member
+    #    can paste their own API key (encrypted, per-member). Tools already
+    #    shown above as live plugins are skipped to avoid duplication. ──
+    live = [p.info() for p in list_plugins()]
+    live_slugs = {i.name.lower() for i in live}
+    live_names = {i.display_name.lower() for i in live}
+    by_cat = {}
+    for t in NARADA_PLATFORM_CATALOG:
+        if (t.get("slug", "").lower() in live_slugs
+                or t.get("display_name", "").lower() in live_names):
+            continue
+        by_cat.setdefault(t.get("category") or "OTHER", []).append(t)
+    catalog_sections = []
+    for cat in sorted(by_cat):
+        tools = by_cat[cat]
+        cards = []
+        for t in tools:
+            slug = t.get("slug", "")
+            is_set = slug in configured_tools
+            badge = ('<span class="pill pill-done">saved</span>' if is_set
+                     else '<span class="pill pill-soon">no plugin yet</span>')
+            home = t.get("homepage") or ""
+            home_html = (f'<a href="{esc(home)}" target="_blank" rel="noopener">'
+                         f'{esc(home)}</a>' if home.startswith("http")
+                         else esc(home))
+            hint = t.get("key_location_hint") or ""
+            cards.append(
+                '<div class="panel" style="margin-bottom:.8rem">'
+                '<div style="display:flex;justify-content:space-between;'
+                'align-items:baseline;gap:1rem;flex-wrap:wrap">'
+                f'<h3 style="margin:0 0 .2rem">'
+                f'{esc(t.get("display_name") or slug)} {badge}</h3>'
+                f'<span class="muted small">{esc(t.get("priority") or "")}</span>'
+                '</div>'
+                f'<p class="muted small" style="margin:.1rem 0">'
+                f'<code>{esc(slug)}</code></p>'
+                f'<p style="margin:.5rem 0;font-size:.9rem">'
+                f'{esc(t.get("description") or "")}</p>'
+                + (f'<p class="muted small" style="margin:.2rem 0">Signup: '
+                   f'{home_html}</p>' if home else "")
+                + (f'<p class="muted small" style="margin:.2rem 0">Key: '
+                   f'{esc(hint)}</p>' if hint else "")
+                + '<form method="POST" action="/members/narada/credentials/save" '
+                  'style="margin-top:.5rem">'
+                  f'<input type="hidden" name="tool" value="{esc(slug)}">'
+                  '<input type="text" name="api_key" placeholder="Paste API key" '
+                  'style="width:100%;max-width:440px;font-family:ui-monospace,'
+                  'Menlo,monospace;font-size:.85rem;padding:.5rem;border:1px solid '
+                  'var(--line);border-radius:6px;background:var(--surface-sunken)">'
+                  ' <button type="submit" class="btn" style="margin-top:.4rem">'
+                  f'{"Update" if is_set else "Save key"}</button>'
+                  '</form>'
+                '</div>')
+        catalog_sections.append(
+            f'<h2 style="margin-top:2rem">'
+            f'{esc(str(cat).replace("_", " ").title())} '
+            f'<span class="muted small">({len(tools)})</span></h2>'
+            + "".join(cards))
+
     body = (
         '<a class="back-link" href="/members/narada">'
         '&larr; Back to Narada</a>'
@@ -198,7 +258,15 @@ def narada_credentials_html(email, configured_tools,
         '<p class="lead">Wire the tools Narada uses for outbound. '
         'Each is per-member; nobody else can use your credentials.</p>'
         + _banner(message, kind)
-        + "".join(sections))
+        + "".join(sections)
+        + '<hr style="margin:2.6rem 0;border:none;'
+          'border-top:1px solid var(--line)">'
+        '<h1 style="margin:0">Full platform catalog</h1>'
+        '<p class="lead">Every integration Narada plans to support. Paste your '
+        'own API key for any tool &mdash; stored encrypted, per-member. Tools '
+        'with a live plugin (above) work today; keys saved here are pre-staged '
+        'for when their plugin ships.</p>'
+        + "".join(catalog_sections))
     return _members_shell("Narada credentials · Globus", body)
 
 

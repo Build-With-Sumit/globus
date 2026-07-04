@@ -308,6 +308,34 @@ GLOBUS_TOOLS = [
     },
 
     # ─────────────────────────────────────────────────────────────────
+    # web_read — keyless web + social read layer.
+    # ─────────────────────────────────────────────────────────────────
+    {
+        "type": "function",
+        "function": {
+            "name": "web_read",
+            "description": (
+                "Read one public web page or social post by URL — keyless "
+                "and fast. Auto-detects the source: a single tweet / X post, "
+                "a Reddit thread, a YouTube video's metadata, a GitHub repo / "
+                "issue / PR / release, or a generic web page. Falls back to a "
+                "headless browser for JS-heavy / bot-walled pages. Returns "
+                "{source, title, body, author, url}. USE when the member "
+                "pastes a link or asks what's at a URL, or to pull a specific "
+                "tweet / thread / repo. One URL per call."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string",
+                            "description": "URL (or a bare tweet id / YouTube id) to read"},
+                },
+                "required": ["url"],
+            },
+        },
+    },
+
+    # ─────────────────────────────────────────────────────────────────
     # Narada — Globus Outbound Agent.
     # ─────────────────────────────────────────────────────────────────
     {

@@ -470,9 +470,11 @@ class Handler(BaseHTTPRequestHandler):
                 count = max(1, min(int(form.get("count") or 50), 500))
             except ValueError:
                 count = 50
-            # ICPFilters: v1 uses the campaign's icp_description for the
-            # LLM-driven copy; lead-source search uses a thin map.
-            icp = ICPFilters(keywords=[(camp.get("icp_description") or "")[:500]])
+            # Parse the free-text icp_description into STRUCTURED filters
+            # (roles/seniority/locations/…) so the lead source actually
+            # searches; cached on the campaign after the first parse.
+            from narada_copy import build_icp
+            icp = build_icp(camp)
             try:
                 leads = ls.search(email, icp, count=count)
             except Exception as e:
