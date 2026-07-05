@@ -109,10 +109,14 @@ def narada_dashboard_html(email, campaigns, message=None, kind=None):
         + _banner(message, kind)
         + setup_warning +
         '<div style="display:flex;justify-content:space-between;'
-        'align-items:center;margin-bottom:1rem">'
+        'align-items:center;gap:.6rem;flex-wrap:wrap;margin-bottom:1rem">'
         '<h2 style="margin:0">Campaigns</h2>'
+        '<div style="display:flex;gap:.5rem;flex-wrap:wrap">'
+        '<a href="/members/narada/credentials" class="btn">'
+        '&#128273; Connect tools</a>'
         '<a href="/members/narada/new" class="btn btn-primary">'
         '+ New campaign</a>'
+        '</div>'
         '</div>'
         + list_html +
         '<p class="muted small" style="margin-top:1.5rem">'
