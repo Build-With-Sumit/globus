@@ -510,6 +510,7 @@ def _dispatch_narada(name, email, inp):
                         email, status=inp.get("status"))}
 
         if name == "narada_create_campaign":
+            _from = (inp.get("from_addr") or "").strip().lower()
             cid = narada_core.create_campaign(
                 email,
                 name=(inp.get("name") or "").strip(),
@@ -518,6 +519,10 @@ def _dispatch_narada(name, email, inp):
                 lead_source=(inp.get("lead_source") or "").strip(),
                 verifier=(inp.get("verifier") or "").strip(),
                 sender=(inp.get("sender") or "").strip(),
+                sender_config=(
+                    {"from_addr": _from}
+                    if _from in narada_core.member_send_accounts(email)
+                    else None),
                 crm=(inp.get("crm") or "").strip(),
                 send_mode=(inp.get("send_mode")
                             or "approve_each").strip())
@@ -580,11 +585,8 @@ def _dispatch_narada(name, email, inp):
                               else "approved")
             prospects = narada_core.list_prospects(
                 email, cid, status=target_status)
-            from_addr = (camp.get("sender_config") or {}).get(
-                "from_addr") if isinstance(camp.get("sender_config"),
-                                            dict) else None
-            if not from_addr:
-                from_addr = email
+            from_addr = (narada_core.sender_config_of(camp).get("from_addr")
+                         or email)
             sent = failed = 0
             for p in prospects[:sender.daily_send_cap(email)]:
                 variants = p.get("copy_variants") or []

@@ -30,6 +30,16 @@ from narada_plugins.types import (
 ROCKETREACH_API_BASE = "https://api.rocketreach.co/api/v2"
 ROCKETREACH_TIMEOUT = 30
 
+# RocketReach sits behind Cloudflare, which 1010-blocks the default
+# urllib User-Agent (`Python-urllib/x.y`) regardless of source IP — it's
+# a client-fingerprint ban, not an IP ban (verified: same key returns 401
+# with a browser UA vs 403 with the urllib UA, from both office + datacenter
+# IPs). A normal browser UA passes cleanly. No proxy needed.
+ROCKETREACH_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
+)
+
 
 def _api_key(member_email: str) -> str | None:
     cred = get_credential(member_email, "rocketreach")
@@ -53,6 +63,7 @@ def _call(member_email: str, method: str, path: str,
         "Api-Key": api_key,
         "Content-Type": "application/json",
         "Accept": "application/json",
+        "User-Agent": ROCKETREACH_USER_AGENT,
     })
     try:
         with urlopen(req, timeout=ROCKETREACH_TIMEOUT) as r:

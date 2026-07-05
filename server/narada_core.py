@@ -351,3 +351,73 @@ def campaign_stats(member_email: str, campaign_id: int) -> dict:
         "sends_by_status":     {r["status"]: int(r["n"]) for r in sends},
         "replies_by_class":    {r["k"]: int(r["n"]) for r in by_classification},
     }
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Shared helpers — used by both the HTTP server and the LLM tool
+# dispatcher (kept here so the two entry points can't drift)
+# ─────────────────────────────────────────────────────────────────────
+
+def sender_config_of(camp: dict) -> dict:
+    """campaign.sender_config comes back from MySQL as a JSON string (or
+    None); normalise to a dict so the send paths can read from_addr."""
+    sc = camp.get("sender_config")
+    if isinstance(sc, str) and sc.strip():
+        try:
+            sc = json.loads(sc)
+        except Exception:
+            sc = None
+    return sc if isinstance(sc, dict) else {}
+
+
+def member_send_accounts(member_email: str) -> list:
+    """Google accounts this member can send from (gmail.send scope),
+    newest connection first — feeds the campaign send-from picker."""
+    rows = db_read(
+        "SELECT provider_account FROM globus_oauth_connections "
+        "WHERE email=%s AND provider='google' AND "
+        "scopes LIKE '%%gmail.send%%' ORDER BY updated_at DESC",
+        (member_email,)) or []
+    out = []
+    for r in rows:
+        a = (r.get("provider_account") or "").strip().lower()
+        if a and a not in out:
+            out.append(a)
+    return out
+
+
+def parse_pasted_leads(text: str) -> list:
+    """Parse pasted leads into Lead objects — bring-your-own-leads import.
+    One lead per line; accepts a bare email, 'First Last <email>', or comma
+    fields in any order (the token with an @ is the email; the rest map to
+    first/last/company/title). Lines with no email are skipped."""
+    import re
+    from narada_plugins.types import Lead
+    email_re = re.compile(
+        r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
+    leads = []
+    for line in (text or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        m = email_re.search(line)
+        if not m:
+            continue
+        addr = m.group(0).lower()
+        parts = [p.strip() for p in line.split(",")]
+        rest = [p for p in parts if not email_re.search(p)]
+        first = last = company = title = ""
+        if rest:
+            first = rest[0]
+            last = rest[1] if len(rest) > 1 else ""
+            company = rest[2] if len(rest) > 2 else ""
+            title = rest[3] if len(rest) > 3 else ""
+        elif "<" in line:                       # "First Last <email>"
+            np = line.split("<", 1)[0].strip().split()
+            first = np[0] if np else ""
+            last = " ".join(np[1:]) if len(np) > 1 else ""
+        leads.append(Lead(
+            first_name=first[:120], last_name=last[:120], email=addr,
+            company=company[:255], company_domain=addr.split("@")[-1][:255],
+            title=title[:255], source="import"))
+    return leads

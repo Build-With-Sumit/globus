@@ -18,6 +18,18 @@ from narada_plugins.types import AuthMethod, PluginCategory
 from narada_platform_catalog import NARADA_PLATFORM_CATALOG
 
 
+def _campaign_from_addr(campaign):
+    """Pull sender_config.from_addr off a campaign row — the column comes
+    back from MySQL as a JSON string (or None)."""
+    sc = campaign.get("sender_config")
+    if isinstance(sc, str) and sc.strip():
+        try:
+            sc = json.loads(sc)
+        except Exception:
+            sc = None
+    return (sc.get("from_addr") or "") if isinstance(sc, dict) else ""
+
+
 def _banner(message, kind):
     if not message:
         return ""
@@ -274,7 +286,8 @@ def narada_credentials_html(email, configured_tools,
 # /members/narada/new — campaign builder
 # ─────────────────────────────────────────────────────────────────────
 
-def narada_new_campaign_html(email, message=None, kind=None):
+def narada_new_campaign_html(email, message=None, kind=None,
+                               send_from_accounts=None):
     senders = list_available_for_member(PluginCategory.SENDER, email)
     sources = list_available_for_member(PluginCategory.LEAD_SOURCE, email)
     verifiers = list_available_for_member(PluginCategory.VERIFIER, email)
@@ -344,6 +357,18 @@ def narada_new_campaign_html(email, message=None, kind=None):
         'CRM <span class="muted small">(optional)</span></span>'
         f'{_select("crm", crms, required=False)}</label>'
         '</div>'
+
+        '<label style="display:block;margin-bottom:1rem">'
+        '<span style="display:block;font-weight:600;margin-bottom:.3rem">'
+        'Send from <span class="muted small">(which of your connected '
+        'mailboxes sends — Gmail sender only)</span></span>'
+        '<select name="send_from" style="width:100%;padding:.5rem;'
+        'border:1px solid var(--line);border-radius:6px;'
+        'background:var(--surface)">'
+        '<option value="" selected>— my default account —</option>'
+        + "".join(f'<option value="{esc(a)}">{esc(a)}</option>'
+                  for a in (send_from_accounts or []))
+        + '</select></label>'
 
         '<label style="display:block;margin-bottom:1rem">'
         '<span style="display:block;font-weight:600;margin-bottom:.3rem">'
@@ -458,8 +483,10 @@ def narada_campaign_detail_html(email, campaign, prospects, stats,
         f'<h1>{esc(name)}</h1>'
         f'<p class="muted small">'
         f'<code>{esc(campaign.get("product") or "")}</code> · '
-        f'sender <code>{esc(campaign.get("sender") or "")}</code> · '
-        f'lead source <code>{esc(campaign.get("lead_source") or "")}</code> · '
+        f'sender <code>{esc(campaign.get("sender") or "")}</code>'
+        + (f' (from <code>{esc(_campaign_from_addr(campaign))}</code>)'
+           if _campaign_from_addr(campaign) else "") +
+        f' · lead source <code>{esc(campaign.get("lead_source") or "")}</code> · '
         f'status <span class="pill pill-soon">{esc(status)}</span></p>'
         + _banner(message, kind) +
         '<div class="panel">'
@@ -475,6 +502,23 @@ def narada_campaign_detail_html(email, campaign, prospects, stats,
         '<div class="panel">'
         '<h3 style="margin-top:0">Actions</h3>'
         + "".join(actions) +
+        '</div>'
+        '<div class="panel">'
+        '<h3 style="margin-top:0">Add leads <span class="muted small">'
+        '(paste your own)</span></h3>'
+        '<p class="muted small" style="margin-top:-.4rem">One per line &mdash; '
+        'a bare email, <code>First Last &lt;email&gt;</code>, or '
+        '<code>email, First, Last, Company, Title</code>. Deduped '
+        'automatically; suppressed addresses are skipped.</p>'
+        f'<form method="POST" action="/members/narada/{cid}/import">'
+        '<textarea name="leads" rows="5" '
+        'placeholder="jane@acme.com, Jane, Doe, Acme, Head of Marketing&#10;'
+        'john@globex.com&#10;Sam Lee &lt;sam@initech.com&gt;" '
+        'style="width:100%;padding:.6rem;border:1px solid var(--line);'
+        'border-radius:6px;font-family:ui-monospace,Menlo,monospace;'
+        'font-size:.85rem"></textarea>'
+        '<button type="submit" class="btn btn-primary" '
+        'style="margin-top:.5rem">Import leads</button></form>'
         '</div>'
         '<h2 style="margin-top:1.5rem">Prospects '
         f'<span class="muted small">({len(prospects)} shown)</span></h2>'

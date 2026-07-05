@@ -460,6 +460,19 @@ class Handler(BaseHTTPRequestHandler):
         the marketer always sees what happened."""
         cid = int(camp["id"])
 
+        if action == "import":
+            leads = narada_core.parse_pasted_leads(form.get("leads") or "")
+            if not leads:
+                return {"kind": "error",
+                        "msg": "no valid emails found — paste one lead per "
+                               "line (email, or 'email, first, last, "
+                               "company')"}
+            res = narada_core.add_prospects(email, cid, leads)
+            return {"kind": "ok",
+                    "msg": f"Imported {res['added']} lead(s) "
+                           f"(dup {res['skipped_dup']}, "
+                           f"suppressed {res['skipped_suppressed']})."}
+
         if action == "find-leads":
             ls_slug = camp.get("lead_source") or ""
             ls = get_lead_source(ls_slug)
@@ -544,11 +557,8 @@ class Handler(BaseHTTPRequestHandler):
                 email, cid, status=target_status)
             cap = sender.daily_send_cap(email)
             sent = failed = 0
-            from_addr = (camp.get("sender_config") or {}).get(
-                "from_addr") if isinstance(camp.get("sender_config"), dict) \
-                else None
-            if not from_addr:
-                from_addr = email  # fall back to the member's own address
+            from_addr = (narada_core.sender_config_of(camp).get("from_addr")
+                         or email)
             for p in prospects[:cap]:
                 variants = p.get("copy_variants") or []
                 if isinstance(variants, str):
@@ -845,7 +855,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send_html(200, narada_new_campaign_html(
                 email,
                 message=(qs.get("msg") or [""])[0] or None,
-                kind=(qs.get("kind") or [""])[0] or None))
+                kind=(qs.get("kind") or [""])[0] or None,
+                send_from_accounts=narada_core.member_send_accounts(email)))
 
         # Campaign detail — /members/narada/<int>
         if route.startswith("/members/narada/"):
@@ -1142,6 +1153,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._redirect(
                     "/members/narada/new?kind=error&msg="
                     + quote("name required"))
+            send_from = (form.get("send_from") or "").strip().lower()
+            if send_from and send_from not in \
+                    narada_core.member_send_accounts(email):
+                send_from = ""   # only allow the member's own accounts
             try:
                 cid = narada_core.create_campaign(
                     email,
@@ -1151,6 +1166,8 @@ class Handler(BaseHTTPRequestHandler):
                     lead_source=(form.get("lead_source") or "").strip(),
                     verifier=(form.get("verifier") or "").strip(),
                     sender=(form.get("sender") or "").strip(),
+                    sender_config=({"from_addr": send_from}
+                                   if send_from else None),
                     crm=(form.get("crm") or "").strip(),
                     send_mode=(form.get("send_mode") or "approve_each").strip())
             except ValueError as e:

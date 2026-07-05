@@ -358,6 +358,11 @@ GLOBUS_TOOLS = [
                         "description": "plugin slug: 'prospeo', 'apollo', etc. Call narada_list_plugins to see available."},
                     "sender": {"type": "string",
                         "description": "plugin slug: 'gmail', 'smartlead', etc."},
+                    "from_addr": {"type": "string",
+                        "description": "OPTIONAL. Which of the member's "
+                        "connected Gmail addresses sends this campaign "
+                        "(gmail_oauth sender). Must be one of their "
+                        "connected accounts; ignored otherwise."},
                     "verifier": {"type": "string", "description": "OPTIONAL"},
                     "crm": {"type": "string", "description": "OPTIONAL"},
                     "send_mode": {"type": "string",
