@@ -35,6 +35,22 @@ def set_credential(member_email: str, tool: str,
         (member_email, tool, enc))
 
 
+def merge_credential(member_email: str, tool: str,
+                      new_values: dict) -> None:
+    """Overlay non-empty `new_values` onto the existing credential (or
+    create a fresh one). Lets the UI change ONE field of a multi-field
+    credential (e.g. Salesforce client_secret) without wiping the others,
+    since the form only submits the fields the member actually filled.
+    To fully clear a credential, use delete_credential."""
+    existing = get_credential(member_email, tool) or {}
+    merged = dict(existing)
+    for k, v in (new_values or {}).items():
+        if (v or "").strip():
+            merged[k] = v
+    if merged:
+        set_credential(member_email, tool, merged)
+
+
 def get_credential(member_email: str, tool: str) -> dict | None:
     """Decrypt + return the credential dict, or None if no active
     credential exists. Plugins call this on every request — it's

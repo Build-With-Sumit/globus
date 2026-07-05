@@ -1125,7 +1125,9 @@ class Handler(BaseHTTPRequestHandler):
                     "/members/narada/credentials?kind=error&msg="
                     + quote("no credential values supplied"))
             try:
-                narada_creds.set_credential(email, tool, cred)
+                # merge (not replace) so updating one field of a
+                # multi-field credential doesn't wipe the rest
+                narada_creds.merge_credential(email, tool, cred)
             except Exception as e:
                 return self._redirect(
                     "/members/narada/credentials?kind=error&msg="
