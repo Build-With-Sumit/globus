@@ -56,8 +56,12 @@ _AGENT_ALLOWED = frozenset({
 # to trigger them, read their briefs, or see their live status. Once
 # per-member agent copies exist, this constant becomes per-row data.
 # (Sumit 2026-06-26.)
+# Config-driven so the open-source build carries no personal default:
+# set AGENTS_OWNER_EMAIL (or reuse GLOBUS_FIRST_MEMBER_EMAIL, the seed
+# member) to nominate the single-tenant owner. If neither is set, no one
+# is treated as owner — owner-only agents stay locked until configured.
 _AGENTS_OWNER_EMAIL = (cfg("AGENTS_OWNER_EMAIL", "")
-                       or "indianbill007@gmail.com").lower()
+                       or cfg("GLOBUS_FIRST_MEMBER_EMAIL", "")).lower()
 
 
 def _is_agents_owner(email):

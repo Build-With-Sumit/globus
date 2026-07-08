@@ -17,15 +17,16 @@ What's here:
     intermittent ElevenLabs 'upstream error' Sumit reported
     2026-06-24).
 
-Module deps: db_read (db_helpers). Reads /opt/buildwithsumit/vault/auto
-directly for the notes-by-type count, defensive against perm errors
+Module deps: db_read (db_helpers). Reads the vault auto-build dir
+(GLOBUS_VAULT_AUTO_DIR, default /opt/globus/vault/auto) directly for the
+notes-by-type count, defensive against perm errors
 (the auto-builder runs as root and can create subdirs blocked to
 www-data — we skip unreadable subdirs rather than 500'ing).
 """
 from __future__ import annotations
 import os
 import time
-from db_helpers import db_read
+from db_helpers import db_read, cfg
 
 
 VAULT_SOURCE_META = {
@@ -176,7 +177,9 @@ def vault_progress_stats(email):
     # poll (the live page parses the response as JSON; an HTML 500
     # error there breaks the whole dashboard).
     notes_by_type = {}
-    base = "/opt/buildwithsumit/vault/auto"
+    # Directory the offline vault auto-builder writes notes into. Config
+    # knob so the open-source build isn't pinned to a production path.
+    base = cfg("GLOBUS_VAULT_AUTO_DIR", "/opt/globus/vault/auto")
     try:
         subdirs = os.listdir(base) if os.path.isdir(base) else []
     except OSError:
