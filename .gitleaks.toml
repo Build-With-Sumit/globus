@@ -1,0 +1,31 @@
+# gitleaks configuration for Build-With-Sumit/globus
+#
+# Extends the built-in default ruleset (covers AWS, GCP, Stripe, OpenAI,
+# GitHub, Slack, private keys, generic high-entropy assignments, etc.) and
+# adds an allowlist so the deliberately-sanitized example files and public
+# identifiers don't produce false positives.
+#
+# Used by both the CI job (.github/workflows/gitleaks.yml) and the local
+# pre-commit hook (.pre-commit-config.yaml).
+
+title = "globus gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Sanitized examples + public identifiers are not secrets"
+
+# Example/template config files ship placeholder values by design.
+paths = [
+  '''config/\.env\.example''',
+  '''config/persona\.example\.md''',
+]
+
+# Values that look secret-shaped but are public or are obvious placeholders.
+regexes = [
+  '''wDsJlOXPqcvIUKdLXjDs''',          # public ElevenLabs library voice id ("Jarvis")
+  '''change-me(-root)?''',             # placeholder DB passwords in .env.example
+  '''replace-with-32-byte-hex''',      # placeholder SESSION_SECRET
+  '''your-[a-z-]+''',                  # generic "your-key-here" style placeholders
+]
