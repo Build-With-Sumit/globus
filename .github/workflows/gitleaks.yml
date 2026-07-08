@@ -1,0 +1,37 @@
+name: gitleaks
+
+# Secret-scanning guard for this PUBLIC repo. Runs on every push and PR so a
+# credential can never land in history unnoticed. Uses the gitleaks CLI via
+# its official Docker image (license-free for org-owned repos, unlike the
+# gitleaks-action, which requires a paid license for organizations).
+# The local .pre-commit-config.yaml catches most leaks before they are even
+# committed; this CI job is the enforced, unbypassable backstop.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  gitleaks:
+    name: Scan for committed secrets
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (full history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # scan the entire commit history, not just HEAD
+
+      - name: Run gitleaks
+        run: |
+          docker run --rm -v "${{ github.workspace }}:/repo" \
+            ghcr.io/gitleaks/gitleaks:latest \
+            detect \
+              --source /repo \
+              --config /repo/.gitleaks.toml \
+              --redact \
+              --verbose \
+              --exit-code 1

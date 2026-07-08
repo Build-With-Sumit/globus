@@ -51,6 +51,14 @@ the cheapest path for dev iteration (~$0.0001 per 1K tokens).
 
 ## House rules
 
+- **Never commit secrets.** Real keys/tokens/passwords/connection strings
+  live only in your untracked `.env` (or the MySQL `config` table) — never
+  in a tracked file, not even a doc or an example. A gitleaks CI job
+  (`.github/workflows/gitleaks.yml`) scans every push and PR, and
+  `.pre-commit-config.yaml` blocks a leak locally — run
+  `pip install pre-commit && pre-commit install` once. If a secret does get
+  committed, rotate it (scrubbing history does not un-leak an exposed key)
+  and open an issue.
 - **Stdlib first.** New runtime deps need a reason in the PR description.
 - **No emoji in source code or comments** unless the PR is specifically
   about the user-facing UI text. They render inconsistently across

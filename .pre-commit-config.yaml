@@ -1,0 +1,19 @@
+# Local secret-scanning guard. Blocks a commit if gitleaks finds a secret in
+# the staged changes, so a credential never leaves your machine.
+#
+# One-time setup:
+#   pip install pre-commit
+#   pre-commit install
+#
+# Keep the pinned rev current with:  pre-commit autoupdate
+#
+# NOTE: a local hook is bypassable (git commit --no-verify) and requires each
+# contributor to install it. The authoritative, unbypassable scan is the
+# gitleaks CI job in .github/workflows/gitleaks.yml, which re-scans the full
+# history on every push and pull request.
+
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.21.2
+    hooks:
+      - id: gitleaks
