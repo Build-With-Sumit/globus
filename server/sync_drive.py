@@ -29,7 +29,7 @@ from google_drive import (
     GOOGLE_DRIVE_AGG_FILES, GOOGLE_DRIVE_AGG_PER_FILE,
     GOOGLE_DRIVE_XLSX_EXPORT_MAX_BYTES,
     drive_list_files, drive_classify,
-    drive_export_with_mime, drive_download_file, xlsx_to_text,
+    drive_export_with_mime, drive_download_file, extract_downloaded_text,
     vault_files_upsert, write_extracted_file,
 )
 from globus_vault_db import globus_upsert_source
@@ -132,12 +132,7 @@ def sync_drive_connection(conn):
                                if is_sheet else None))
             else:
                 raw = drive_download_file(access, fid)
-            if mime == "application/vnd.google-apps.spreadsheet":
-                text = xlsx_to_text(raw)
-            else:
-                text = (raw.decode("utf-8", errors="replace")
-                        if isinstance(raw, (bytes, bytearray)) else str(raw))
-            text = (text or "").strip()
+            text = (extract_downloaded_text(mime, raw) or "").strip()
             if not text:
                 vault_files_upsert(
                     email=email, connection_id=conn_id, provider_account=pa,

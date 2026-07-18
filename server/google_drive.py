@@ -27,6 +27,10 @@ from datetime import datetime, timezone
 from urllib.request import Request, urlopen
 
 from db_helpers import db_write
+from drive_extract import (
+    DOCX_MIME, XLSX_MIME, PPTX_MIME, PDF_MIME,
+    docx_to_text, pptx_to_text, pdf_to_text,
+)
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -68,6 +72,13 @@ DRIVE_EXTRACTABLE = {
     "application/json": ("download", "json", None),
     "application/xml":  ("download", "xml", None),
     "application/rtf":  ("download", "rtf", None),
+    # Binary office documents + PDF — downloaded whole, then turned into text by
+    # drive_extract. OOXML (.docx/.xlsx/.pptx) is stdlib-only; PDF needs the
+    # optional `pypdf` dep and degrades to a named skip if it is absent.
+    DOCX_MIME: ("download", "txt", None),
+    XLSX_MIME: ("download", "txt", None),
+    PPTX_MIME: ("download", "txt", None),
+    PDF_MIME:  ("download", "txt", None),
 }
 
 # Folders, shortcuts, forms, sites, images, video, audio, archives — skip.
@@ -247,8 +258,6 @@ def drive_classify(f):
     if mime in DRIVE_EXTRACTABLE:
         method, ext, export_mime = DRIVE_EXTRACTABLE[mime]
         return method, ext, export_mime, None
-    if mime.startswith("application/pdf"):
-        return None, None, None, "pdf (extraction not yet wired)"
     return None, None, None, f"unsupported mime {mime}"
 
 
@@ -376,6 +385,34 @@ def xlsx_to_text(data, max_chars=GOOGLE_SHEET_EXTRACT_MAX_CHARS):
 
 
 # ─────────────────────────────────────────────────────────────────────
+# Shared extraction dispatch — turns exported/downloaded bytes into text.
+# Both the bulk sync (sync_drive._process) and the on-demand read_file path
+# call this so they can never drift on which mimes are understood.
+# ─────────────────────────────────────────────────────────────────────
+
+def extract_downloaded_text(mime, raw):
+    """Exported/downloaded bytes → text, dispatched by mime.
+
+    Raises ExtractionError (from drive_extract) on a hostile/broken binary —
+    never returns a marker string, so a failure records as a skip rather than
+    being written to disk as the document's own content.
+
+    Google Sheets export to XLSX bytes, so the native-spreadsheet mime and a
+    real .xlsx both flow through xlsx_to_text."""
+    m = (mime or "").lower()
+    if m == "application/vnd.google-apps.spreadsheet" or m == XLSX_MIME:
+        return xlsx_to_text(raw)
+    if m == DOCX_MIME:
+        return docx_to_text(raw)
+    if m == PPTX_MIME:
+        return pptx_to_text(raw)
+    if m == PDF_MIME or m.startswith("application/pdf"):
+        return pdf_to_text(raw)
+    return (raw.decode("utf-8", errors="replace")
+            if isinstance(raw, (bytes, bytearray)) else str(raw))
+
+
+# ─────────────────────────────────────────────────────────────────────
 # One-shot extract — used by on-demand `read_file` path in the orchestrator
 # ─────────────────────────────────────────────────────────────────────
 
@@ -397,11 +434,7 @@ def drive_extract_one(access_token, f):
                            if is_sheet else None))
         else:
             raw = drive_download_file(access_token, fid)
-        if mime == "application/vnd.google-apps.spreadsheet":
-            text = xlsx_to_text(raw)
-        else:
-            text = (raw.decode("utf-8", errors="replace")
-                    if isinstance(raw, (bytes, bytearray)) else str(raw))
+        text = extract_downloaded_text(mime, raw)
         return (text or "").strip(), ext
     except Exception as e:
         return None, f"{type(e).__name__}: {e}"

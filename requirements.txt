@@ -6,3 +6,8 @@ cryptography>=42.0          # Fernet encryption for OAuth refresh tokens
 # (COMPOSIO_API_KEY set in DB config). Safe to omit on installs that
 # don't use the Calendar / GitHub / Notion / Slack tool surface.
 composio>=0.7,<1            # third-party tool catalog + managed OAuth
+
+# Optional — PDF text extraction for the Drive vault ingest. Without it,
+# .docx/.xlsx/.pptx still extract (stdlib OOXML), but PDFs record a named
+# skip ("pypdf not installed on this host") instead of their text.
+pypdf>=4.0                  # PDF → text for drive_extract.pdf_to_text
