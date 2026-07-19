@@ -439,6 +439,64 @@ otherwise the digest prints to stdout and cron captures it to the log.
 python tests/test_email_intel.py   # heartbeat gate, parse failures, chunking
 ```
 
+## 12. (optional) Enable the sales desk
+
+A daily ranked call list, a short priorities brief, and a hygiene report.
+**Read-only** — it never writes to a CRM and never sends email.
+
+Write `SALES_DESK_CONTEXT` first (what you sell, to whom, what counts as
+urgent). It ships empty, and without it the model ranks confidently and
+wrongly. Then preview it — **posting is opt-in**, so a first run can't
+surprise a team channel:
+
+```bash
+# prints, delivers nothing
+python3 scripts/sales_desk_run.py you@example.com
+
+# no model calls at all — pure deterministic ordering
+python3 scripts/sales_desk_run.py you@example.com --no-llm
+```
+
+Tune `SALES_DESK_STATUS_RULES` to your pipeline. Stage names are **data**,
+not code: `{status: {callable, weight, terminal}}`. Mark the dead stages
+`terminal` and give the live ones weights — the weights are the fallback
+ordering used whenever the model is unavailable, so they're worth getting
+roughly right. An unknown stage stays callable, so a stage someone adds in
+your CRM shows up rather than silently vanishing.
+
+```cron
+30 8 * * 1-5  cd /opt/globus && flock -n /tmp/sales-desk.lock \
+    .venv/bin/python3 scripts/sales_desk_run.py you@example.com --post \
+    >> /var/log/globus-sales-desk.log 2>&1
+```
+
+Set `SALES_DESK_CHAT_ID` (team) and `SALES_DESK_OPS_CHAT_ID` (you) —
+failures go to the ops target, so the team channel never receives a stack
+trace. Without a transport configured the desk prints and cron logs it.
+
+If the desk finds **no callable leads it refuses to post** and alerts you
+instead: an empty call list looks exactly like a quiet day, and that is the
+one thing it must never imply. Check `SALES_DESK_SOURCES`, that the source
+has data for that member, and that your status rules aren't marking every
+stage terminal.
+
+**Reading your CRM.** The built-in `pipeline` source reads this install's own
+outbound prospects and their latest engagement. The bundled CRM plugins are
+write-only (upsert/create/log), so there is no honest CRM read yet — register
+your own source to add one:
+
+```python
+import sales_desk
+sales_desk.register_source("mycrm", lambda member_email, limit: [
+    {"id": ..., "name": ..., "email": ..., "company": ..., "title": ...,
+     "status": ..., "owner": ..., "days_since": ..., "note": ..., "link": ...},
+])
+```
+
+```bash
+python tests/test_sales_desk.py
+```
+
 ## Upgrading
 
 ```bash

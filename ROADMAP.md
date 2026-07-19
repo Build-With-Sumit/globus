@@ -408,6 +408,53 @@ Next:
 - Optional archiving as a separate, explicitly opted-in capability — never a
   side effect of a taxonomy bucket.
 
+## v0.9 (current) — Sales desk
+
+A daily ranked call list, a short priorities brief, and a pipeline hygiene
+report — pushed into chat rather than a dashboard nobody opens. **Read-only:
+it never writes to a CRM and never sends email.**
+
+The shape: `gather → bound → dedup → rank (batched LLM, global indices) →
+band-merge → fail open to a deterministic sort → chunk → deliver → beacon`.
+Deterministic code does only what is *not* judgment — eligibility, dedup,
+bounding, arithmetic. The model decides what matters now and what the next
+step is, because a status-lookup sort can't tell you that a lead who replied
+"send me pricing" three days ago outranks a fresher one who never answered.
+
+- ✅ **Batched ranking with global indices.** Ranking is batched because the
+  reliability ceiling is on OUTPUT rows: ask for one line per lead and the
+  model drops rows long before the input runs out — and a truncated ranking
+  looks exactly like a complete one. Indices are global so batches merge, and
+  the four priority bands are ABSOLUTE (never "rank these relative to each
+  other") so independently-ranked batches stay comparable.
+- ✅ **Nothing is silently dropped.** A lead the model skipped is appended with
+  a derived band and flagged, never omitted. A hallucinated index outside the
+  batch is rejected; an unknown band is coerced rather than dropping the lead.
+- ✅ **A partial ranking is discarded, not shipped.** Below an 85% parse floor
+  the whole ranking is thrown away and the deterministic order is used — a
+  short list reads as a complete one to whoever gets it.
+- ✅ **Fails open everywhere.** Ranking down → deterministic order. Brief down →
+  list posts without it. A broken lead source → the others still run. A sales
+  team that doesn't get its list has no fallback; they just don't call anyone.
+- ✅ **Fails closed on an empty feed.** An empty call list is indistinguishable
+  from a quiet day, so it raises loudly and alerts the operator instead.
+- ✅ **Never posts an error as content.** A model failure returns empty, and an
+  implausibly short brief is treated as a failure — a fluent refusal is
+  well-formed and would otherwise sail into the team channel as the brief.
+- ✅ **Stage names are data.** `{status: {callable, weight, terminal}}` in
+  config; no status string appears in logic, and an unknown stage stays
+  callable. Timezone is config too — never an inline offset.
+- ✅ **Beacon on every completion** + failure DM to an ops target, so "the desk
+  stopped" is queryable and the team channel never sees a stack trace.
+- ✅ **Tests** — `tests/test_sales_desk.py`, 36 hermetic checks.
+- 📄 See INSTALL.md → "Enable the sales desk".
+
+Known limit — **reading a CRM is an open extension point.** The bundled CRM
+plugins implement a WRITE protocol (upsert/create/log) and deliberately do not
+read, so the built-in source reads this install's own outbound pipeline
+instead. Adding a per-vendor read (pagination, field hydration, rate limits) is
+real work and is left as a documented seam rather than faked.
+
 ## v1.0 — production-ready
 
 Shipped:
