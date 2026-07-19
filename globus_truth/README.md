@@ -1,0 +1,258 @@
+# Globus Truth Layer
+
+Globus Truth Layer is a zero-dependency, local reliability layer for agent fleets.
+Agents submit versioned run receipts; a deterministic evaluator checks the claim
+against timestamps, measured counts, evidence, heartbeats, and explicit checks
+before the run is allowed to look healthy.
+
+It exists because fluent output is not the same thing as successful work. The
+pre-existing Globus fleet has seen quiet pipelines report all-clear, declared
+success select zero records, and an LLM refusal get persisted as if it were a
+finished artifact. Truth Layer turns those incident lessons into one reusable
+contract.
+
+## Quick start
+
+Requirements: Python 3.10 or later. There are no third-party packages and no build
+step.
+
+From the repository root:
+
+```bash
+python -m globus_truth
+```
+
+Open <http://127.0.0.1:8765>. The command creates `globus-truth.db`, appends five
+de-identified scenarios with timestamped receipt IDs, and starts the dashboard/API.
+It never deletes an existing receipt. Stop it with `Ctrl+C`. The explicit
+`python -m globus_truth demo` command is equivalent.
+
+Use a different database or port:
+
+```bash
+python -m globus_truth demo --db ./local-truth.db --port 9000
+```
+
+The other CLI commands are:
+
+```bash
+python -m globus_truth evaluate receipt.json
+python -m globus_truth ingest --db globus-truth.db receipt.json
+python -m globus_truth list --db globus-truth.db --limit 50
+python -m globus_truth load-demo --db globus-truth.db
+python -m globus_truth serve --db globus-truth.db
+```
+
+Use `-` instead of a filename to read a receipt from standard input.
+
+## Run the tests
+
+```bash
+python -m compileall -q globus_truth
+python -m unittest discover -s globus_truth/tests -v
+```
+
+The suite uses only temporary files and loopback HTTP. It does not contact an
+external network or service.
+
+## Receipt format
+
+The current contract is schema version `1.0`. The machine-readable JSON Schema is
+[`receipt-schema-v1.json`](receipt-schema-v1.json); the evaluator in
+[`evaluator.py`](evaluator.py) is authoritative because it also enforces semantic
+and cross-field invariants.
+
+```json
+{
+  "schema_version": "1.0",
+  "receipt_id": "indexer-20260719-001",
+  "agent_id": "document-indexer",
+  "run_id": "20260719T120000Z",
+  "declared_status": "success",
+  "started_at": "2026-07-19T12:00:00Z",
+  "finished_at": "2026-07-19T12:02:00Z",
+  "heartbeat_at": "2026-07-19T12:02:00Z",
+  "input": {
+    "items_seen": 12,
+    "items_eligible": 4
+  },
+  "output": {
+    "items_processed": 4,
+    "items_changed": 4
+  },
+  "summary": "Indexed four eligible records and verified the manifest.",
+  "evidence": [
+    {
+      "kind": "checksum",
+      "ref": "artifact:index-manifest-v1",
+      "observed_at": "2026-07-19T12:02:00Z",
+      "detail": "Manifest contains four records.",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  ],
+  "checks": [
+    {
+      "name": "manifest_count",
+      "passed": true,
+      "detail": "Manifest count equals items_changed."
+    }
+  ],
+  "metadata": {
+    "environment": "local"
+  }
+}
+```
+
+Identifiers accept letters, numbers, `.`, `_`, `:`, and `-`, up to 128 characters.
+Timestamps must be timezone-aware RFC 3339 values. Counts must be ordinary
+non-negative integers, not booleans, with this invariant:
+
+```text
+items_changed <= items_processed <= items_eligible <= items_seen
+```
+
+Supported evidence kinds are `artifact`, `database_write`, `api_ack`, `checksum`,
+`metric`, and `human_ack`. Evidence timestamps must belong to the run window.
+Unknown top-level or nested contract fields are rejected by the evaluator so schema
+drift cannot pass silently.
+
+A no-work receipt uses `declared_status: "no_work"`, zero eligible/processed/changed
+counts, a fresh heartbeat, and:
+
+```json
+{
+  "no_work": {
+    "reason_code": "no_eligible_records",
+    "reason": "Eight records were inspected; none met the deterministic age rule."
+  }
+}
+```
+
+A failed receipt uses `declared_status: "failed"` and:
+
+```json
+{
+  "error": {
+    "code": "destination_timeout",
+    "message": "The destination did not acknowledge the write."
+  }
+}
+```
+
+## Verdicts
+
+| Verdict | Meaning |
+|---|---|
+| `healthy` | A fresh declared success has measured work, evidence, valid timestamps/counts, and no failed checks. |
+| `verified_no_work` | A fresh quiet run proves it inspected input, records zero eligible work, supplies a reason, and emitted a heartbeat. |
+| `degraded_contradictory` | The receipt is structurally readable but its claim conflicts with evidence, counts, timestamps, checks, or refusal/error prose. |
+| `failed` | The agent declared failure, or the receipt cannot satisfy the versioned structure. |
+| `stale` | The latest otherwise-valid completion/heartbeat is older than the configured threshold (24 hours by default). |
+
+Failure and contradiction take precedence over staleness. A declared success without
+evidence can never be `healthy`. Common fluent refusal and error forms—such as asking
+for missing source material—cannot become healthy output merely because they are
+well-written.
+
+Truth Layer validates the receipt and its evidence metadata; it does not fetch an
+external artifact or independently prove that an upstream system told the truth.
+For stronger provenance, producers should emit destination acknowledgements and
+content hashes that a downstream verifier controls.
+
+## JSON API
+
+The server binds to `127.0.0.1` by default and sends no CORS permission. JSON request
+bodies are limited to 64 KiB, must be UTF-8 `application/json`, reject duplicate
+keys/non-finite numbers, and use a fixed contract. Receipt text is displayed with DOM
+`textContent`, not HTML, and responses include restrictive browser security headers.
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/v1/summary` | Fleet totals grouped by latest verdict. |
+| `GET` | `/api/v1/runs?limit=100&offset=0` | List persisted receipts and their latest evaluations. |
+| `GET` | `/api/v1/runs/{receipt_id}` | Fetch one persisted receipt/evaluation. |
+| `POST` | `/api/v1/receipts` | Evaluate and persist one receipt. |
+| `GET` | `/api/v1/samples` | Preview five safe, freshly timestamped sample receipts. |
+| `POST` | `/api/v1/samples/load` | Load samples; body must be `{}`. |
+
+Example:
+
+```bash
+curl -X POST http://127.0.0.1:8765/api/v1/receipts \
+  -H "Content-Type: application/json" \
+  --data-binary @receipt.json
+```
+
+Successful ingestion returns the storage ID, whether the immutable receipt was newly
+created, and the complete verdict/check explanation. An exact retry is idempotent
+and adds an evaluation-history entry. Reusing a receipt ID for different content
+returns HTTP `409`; audit history is never silently rewritten.
+
+The API is intentionally unauthenticated because its default threat boundary is one
+local machine. Binding it to a non-loopback address prints a warning and should be
+done only behind authentication and a trusted reverse proxy.
+
+## Integrate an agent
+
+An agent should emit its receipt only after measuring its inputs and checking the
+destination. Keep business logic in the agent and use Truth Layer as the shared
+judge:
+
+```python
+import json
+import urllib.request
+
+receipt = {
+    # Build the complete v1.0 receipt shown above.
+}
+request = urllib.request.Request(
+    "http://127.0.0.1:8765/api/v1/receipts",
+    data=json.dumps(receipt).encode("utf-8"),
+    headers={"Content-Type": "application/json"},
+    method="POST",
+)
+with urllib.request.urlopen(request, timeout=5) as response:
+    verdict = json.load(response)["evaluation"]["verdict"]
+```
+
+For in-process integration:
+
+```python
+from globus_truth import TruthRepository, TruthService
+
+service = TruthService(TruthRepository("globus-truth.db"))
+result = service.ingest(receipt)
+print(result["evaluation"]["verdict"])
+```
+
+Recommended fleet pattern:
+
+1. Count inputs at the source.
+2. Perform work.
+3. Read back or acknowledge the destination.
+4. Record evidence and deterministic checks.
+5. Emit a receipt on every path, including no-work and failure.
+6. Alert on `degraded_contradictory`, `failed`, or `stale`; do not turn them green
+   from narrative text.
+
+SQLite writes use parameterized queries and short connections. Receipts are immutable
+by ID, latest verdicts power the dashboard, and every reevaluation remains in the
+verdict history.
+
+## Supported platforms
+
+The component uses Python's `datetime`, `sqlite3`, `http.server`, and other standard
+library modules only. It is designed for Python 3.10+ on Windows, macOS, and Linux.
+The dashboard works in current browsers with JavaScript enabled. No Docker, Node.js,
+database server, cloud account, API key, or outbound network access is required.
+
+## Built during OpenAI Build Week with Codex and GPT-5.6
+
+**Globus Truth Layer is the new component built during OpenAI Build Week with Codex
+and GPT-5.6.** It includes the v1 receipt contract, strict evaluator, SQLite audit
+repository, local dashboard/API, safe demo fixtures, tests, and this documentation.
+
+The broader Globus platform and its existing agent fleet predate this Build Week
+work. They were not built with Codex or GPT-5.6, and this repository does not claim
+otherwise. Truth Layer is a self-contained extension informed by real reliability
+incidents in that pre-existing system.

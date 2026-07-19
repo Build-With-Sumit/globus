@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://globus.example/schemas/truth-receipt-1.0.json",
+  "title": "Globus Truth Layer Run Receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "receipt_id",
+    "agent_id",
+    "run_id",
+    "declared_status",
+    "started_at",
+    "finished_at",
+    "heartbeat_at",
+    "input",
+    "output",
+    "summary",
+    "evidence",
+    "checks"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "receipt_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"},
+    "agent_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"},
+    "run_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"},
+    "declared_status": {"enum": ["success", "no_work", "failed"]},
+    "started_at": {"type": "string", "format": "date-time"},
+    "finished_at": {"type": "string", "format": "date-time"},
+    "heartbeat_at": {"type": "string", "format": "date-time"},
+    "input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["items_seen", "items_eligible"],
+      "properties": {
+        "items_seen": {"type": "integer", "minimum": 0, "maximum": 1000000000},
+        "items_eligible": {"type": "integer", "minimum": 0, "maximum": 1000000000}
+      }
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["items_processed", "items_changed"],
+      "properties": {
+        "items_processed": {"type": "integer", "minimum": 0, "maximum": 1000000000},
+        "items_changed": {"type": "integer", "minimum": 0, "maximum": 1000000000}
+      }
+    },
+    "summary": {"type": "string", "minLength": 1, "maxLength": 2000},
+    "evidence": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "ref", "observed_at"],
+        "properties": {
+          "kind": {"enum": ["artifact", "database_write", "api_ack", "checksum", "metric", "human_ack"]},
+          "ref": {"type": "string", "minLength": 1, "maxLength": 500},
+          "observed_at": {"type": "string", "format": "date-time"},
+          "detail": {"type": "string", "minLength": 1, "maxLength": 1000},
+          "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+        }
+      }
+    },
+    "checks": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "passed", "detail"],
+        "properties": {
+          "name": {"type": "string", "minLength": 1, "maxLength": 100},
+          "passed": {"type": "boolean"},
+          "detail": {"type": "string", "minLength": 1, "maxLength": 1000}
+        }
+      }
+    },
+    "no_work": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reason_code", "reason"],
+      "properties": {
+        "reason_code": {"type": "string", "minLength": 1, "maxLength": 100},
+        "reason": {"type": "string", "minLength": 1, "maxLength": 1000}
+      }
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message"],
+      "properties": {
+        "code": {"type": "string", "minLength": 1, "maxLength": 100},
+        "message": {"type": "string", "minLength": 1, "maxLength": 2000}
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "maxProperties": 20,
+      "additionalProperties": {"type": ["string", "number", "integer", "boolean"]}
+    }
+  }
+}

@@ -46,6 +46,33 @@ on schedules and produces briefs you read at 8 AM. Each agent
 declares what data it reads + what it can and cannot do; nothing acts
 without your sign-off.
 
+## OpenAI Build Week: Globus Truth Layer
+
+![Globus Truth Layer dashboard](docs/assets/globus-truth-dashboard.png)
+
+[`globus_truth/`](globus_truth/) is a new, self-contained reliability layer for
+the agent fleet. Agents emit versioned run receipts with measured counts,
+timestamps, checks, heartbeats, and evidence references. A deterministic
+evaluator then returns one of five explainable verdicts: healthy, verified
+no-work, contradictory, failed, or stale. Receipts and verdict history stay in
+local SQLite, with a responsive localhost dashboard and JSON API.
+
+Run the complete de-identified demo with no setup beyond Python 3.10+:
+
+```bash
+python -m globus_truth
+```
+
+Open <http://127.0.0.1:8765>. The component has no third-party dependencies and
+does not call an external service. Its [README](globus_truth/README.md) documents
+the receipt contract, API, integration path, supported platforms, limitations,
+and test command.
+
+**Scope disclosure:** Globus Truth Layer is the new component built during
+OpenAI Build Week with Codex and GPT-5.6. The broader Claude-native Globus
+platform and its existing agent fleet predate Build Week; this repository does
+not claim they were built with Codex or GPT-5.6.
+
 ## The brain
 
 | Surface | Default LLM | Why |

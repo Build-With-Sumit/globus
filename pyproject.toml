@@ -41,4 +41,7 @@ Issues = "https://github.com/Build-With-Sumit/globus/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["server*"]
+include = ["server*", "globus_truth*"]
+
+[tool.setuptools.package-data]
+globus_truth = ["receipt-schema-v1.json", "README.md"]
