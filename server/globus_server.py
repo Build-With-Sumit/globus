@@ -169,6 +169,7 @@ from org_db import (  # noqa: E402
 from org_portal_html import (  # noqa: E402
     org_login_html, org_code_html, org_home_html, org_chat_html,
     org_connect_html, org_admin_html, org_privacy_html, org_terms_html,
+    org_no_agents_html,
 )
 from globus_agents_catalog import GLOBUS_AGENTS_CATALOG  # noqa: E402
 from auth_cookies import make_cookie, CLEAR_COOKIE  # noqa: E402
@@ -753,6 +754,22 @@ class Handler(BaseHTTPRequestHandler):
         return [(a.get("name"), a.get("role") or a.get("name"))
                 for a in GLOBUS_AGENTS_CATALOG if a.get("name")]
 
+    def _org_granted_slugs(self, email, org):
+        """Which agents this employee may see and run.
+
+        Default-private: an employee sees nothing until an admin grants it to
+        everyone, their team, or them personally. Admins see the whole
+        catalog without having to grant it to themselves — otherwise the first
+        admin of a new org faces an empty page and no way to fill it."""
+        if is_org_admin(email, org["id"]):
+            return {a.get("name") for a in GLOBUS_AGENTS_CATALOG if a.get("name")}
+        return agent_grants_for(email, org["id"])
+
+    def _org_agent_catalog(self, email, org):
+        granted = self._org_granted_slugs(email, org)
+        return [a for a in catalog_for_member(email)
+                if a.get("name") in granted], granted
+
     def _org_do_GET(self, org, parsed, route):
         """Org-host GET plane. ALLOW-LIST: anything not named here 404s.
         Returns the sentinel False to hand a shared route to the normal
@@ -789,9 +806,25 @@ class Handler(BaseHTTPRequestHandler):
 
         # ---- authenticated org surfaces ----
         if route in ("/", "/members", "/members/globus"):
+            _cat, granted = self._org_agent_catalog(email, org)
             return self._send_html(200, org_home_html(
                 org, email, cards_html="",
-                is_admin=is_org_admin(email, org["id"])))
+                is_admin=is_org_admin(email, org["id"]),
+                has_agents=bool(granted)))
+
+        if route == "/members/globus/agents":
+            catalog, granted = self._org_agent_catalog(email, org)
+            if not granted:
+                # An empty dashboard reads as "the feature is broken". Say
+                # plainly that nothing has been shared yet, and who can.
+                return self._send_html(200, org_no_agents_html(org, email))
+            return self._send_html(200, agents_dashboard_html(
+                email, catalog, agent_status(email=email)))
+
+        if route == "/api/globus/agent-status":
+            # Runs are keyed by member_email, so an employee only ever sees
+            # their own — no extra scoping needed for isolation here.
+            return self._send_json(200, agent_status(email=email))
 
         if route == "/members/globus/chat":
             return self._send_html(200, org_chat_html(org, email, []))
@@ -888,6 +921,21 @@ class Handler(BaseHTTPRequestHandler):
                 return self._redirect(
                     "/members/connect?kind=error&msg=" + quote(str(e)))
             return self._redirect(url)
+
+        # ---- run a shared agent ----
+        if route == "/members/globus/agents/run":
+            form = self._form()
+            name = (form.get("agent") or "").strip()
+            # RE-AUTHORIZE here. The single-tenant run handler has no notion of
+            # grants, so falling through to it would let any employee run any
+            # agent in the catalog by posting its slug — the grant filter on
+            # the dashboard is presentation, not access control.
+            if name not in self._org_granted_slugs(email, org):
+                return self._org_404()
+            if not find_agent(name):
+                return self._redirect("/members/globus/agents")
+            agent_run_async(name, email)
+            return self._redirect("/members/globus/agents")
 
         # ---- admin console ----
         if route.startswith("/members/globus/admin/"):

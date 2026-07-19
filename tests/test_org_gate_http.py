@@ -153,9 +153,11 @@ st, body, _, _ = req("GET", "/api/globus/vault-progress", host=ORG_HOST)
 check("an unauthenticated API call gets 401", st == 401, f"{st}")
 
 print("\norg host — the isolation property (real requests):")
-for leak in ("/members/narada", "/members/globus/agents", "/members/globus/setup",
+# NOTE: /members/globus/agents is deliberately NOT in this list — it is an
+# allow-listed org route (grant-filtered; see the shared-agents section below).
+for leak in ("/members/narada", "/members/globus/setup",
              "/members/vault-progress", "/members/telegram/bot",
-             "/members/whatsapp"):
+             "/members/whatsapp", "/members/globus/upload"):
     st, body, _, _ = req("GET", leak, host=ORG_HOST,
                          cookie=make_cookie("bob@acme.com"))
     check(f"{leak} 404s on an org host", st == 404, f"got {st}")
@@ -235,6 +237,81 @@ check("an admin can grant", st in (302, 303), f"{st}")
 st, _, _, _ = req("POST", "/members/narada/credentials/save", host=ORG_HOST,
                   cookie=ck, body="x=1")
 check("a single-tenant POST route 404s on an org host", st == 404, f"{st}")
+
+print("\norg host — shared agents (grant-filtered):")
+GRANTS = []          # rows returned for org_agent_grants
+
+
+def _db_read_with_grants(sql, params=()):
+    if "FROM org_agent_grants" in sql:
+        return list(GRANTS)
+    return db_read(sql, params)
+
+
+_dbh.db_read = _db_read_with_grants
+import org_db as _org_db  # noqa: E402
+_org_db.configure(db_read=_db_read_with_grants, db_write=db_write)
+
+# nothing granted yet
+st, body, _, _ = req("GET", "/members/globus/agents", host=ORG_HOST, cookie=ck)
+check("with no grants the employee gets an explanatory page, not an empty one",
+      st == 200 and "No shared agents yet" in body, f"{st}")
+st, body, _, _ = req("GET", "/", host=ORG_HOST, cookie=ck)
+check("...and the home page hides the Agents link",
+      st == 200 and "/members/globus/agents" not in body)
+
+# the real catalog's first agent, granted to everyone
+AGENT_SLUG = (G.GLOBUS_AGENTS_CATALOG[0] or {}).get("name")
+GRANTS.append({"agent_slug": AGENT_SLUG})
+st, body, _, _ = req("GET", "/members/globus/agents", host=ORG_HOST, cookie=ck)
+check("a granted agent appears on the dashboard",
+      st == 200 and AGENT_SLUG in body, f"{st}")
+st, body, _, _ = req("GET", "/", host=ORG_HOST, cookie=ck)
+check("...and the home page now shows the Agents link",
+      "/members/globus/agents" in body)
+
+print("  — the run route is access control, not decoration:")
+st, _, _, loc = req("POST", "/members/globus/agents/run", host=ORG_HOST,
+                    cookie=ck, body=f"agent={AGENT_SLUG}")
+check("an employee CAN run an agent granted to them",
+      st in (302, 303), f"{st}")
+
+ungranted = None
+for a in G.GLOBUS_AGENTS_CATALOG[1:]:
+    if a.get("name") and a["name"] != AGENT_SLUG:
+        ungranted = a["name"]
+        break
+if ungranted:
+    st, _, _, _ = req("POST", "/members/globus/agents/run", host=ORG_HOST,
+                      cookie=ck, body=f"agent={ungranted}")
+    check("posting an UNGRANTED slug directly is refused (404), not run",
+          st == 404, f"{st}")
+    st, body, _, _ = req("GET", "/members/globus/agents", host=ORG_HOST,
+                         cookie=ck)
+    check("...and it never appears on their dashboard",
+          ungranted not in body)
+
+# admins see the whole catalog without granting it to themselves
+GRANTS.clear()
+st, body, _, _ = req("GET", "/members/globus/agents", host=ORG_HOST,
+                     cookie=make_cookie("boss@acme.com"))
+check("an admin sees the catalog without a self-grant",
+      st == 200 and AGENT_SLUG in body, f"{st}")
+st, _, _, _ = req("POST", "/members/globus/agents/run", host=ORG_HOST,
+                  cookie=make_cookie("boss@acme.com"), body=f"agent={AGENT_SLUG}")
+check("an admin can run it", st in (302, 303), f"{st}")
+
+# a non-member still gets nothing, even with grants present
+GRANTS.append({"agent_slug": AGENT_SLUG})
+st, body, _, _ = req("GET", "/members/globus/agents", host=ORG_HOST,
+                     cookie=make_cookie("outsider@example.com"))
+check("a non-member cannot reach the agents page at all",
+      st == 200 and "Sign in to" in body, f"{st}")
+st, _, _, _ = req("POST", "/members/globus/agents/run", host=ORG_HOST,
+                  cookie=make_cookie("outsider@example.com"),
+                  body=f"agent={AGENT_SLUG}")
+check("a non-member cannot run anything",
+      st in (302, 303, 401, 404), f"{st}")
 
 srv.shutdown()
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")

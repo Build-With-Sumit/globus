@@ -138,9 +138,13 @@ _, r = get("/members", cookie_email="bob@acme.com")
 check("/members is the ORG home, not the single-tenant landing",
       r is not False and r[1] == 200 and "Welcome" in r[2])
 
-for leak in ("/members/narada", "/members/globus/agents",
+# `/members/globus/agents` and `/api/globus/agent-status` are NOT here: both are
+# allow-listed org routes. The agents page is grant-filtered, and agent-status is
+# keyed by member_email so an employee only ever sees their own runs. The access
+# control that matters lives on the RUN route — covered in test_org_gate_http.py.
+for leak in ("/members/narada",
              "/members/globus/setup", "/members/vault-progress",
-             "/api/globus/agent-status", "/members/telegram/bot",
+             "/members/telegram/bot",
              "/members/whatsapp", "/members/globus/upload", "/admin"):
     _, r = get(leak, cookie_email="bob@acme.com")
     check(f"single-tenant route {leak} 404s on an org host (no fall-through)",

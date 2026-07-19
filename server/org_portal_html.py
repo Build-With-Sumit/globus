@@ -111,12 +111,18 @@ def org_code_html(org, email, message="", ok=False):
     return _org_page(org, name + " · Globus", body)
 
 
-def org_home_html(org, email, cards_html="", is_admin=False):
+def org_home_html(org, email, cards_html="", is_admin=False, has_agents=False):
     """Authenticated org landing. `cards_html` is the (grant-filtered) agents
-    dashboard. Admins additionally get a 'Sharing' link to the admin console."""
+    dashboard. Admins additionally get a 'Sharing' link to the admin console.
+
+    The Agents link only appears once something has actually been shared with
+    this employee — a link to a page that can only say "nothing here" is worse
+    than no link."""
     name = _org_name(org)
     admin_link = ("<a class=\"btn\" href=\"/members/globus/admin\">Sharing</a>"
                   if is_admin else "")
+    agents_link = ("<a class=\"btn\" href=\"/members/globus/agents\">Agents</a>"
+                   if has_agents else "")
     body = ("<section class=\"section\"><div class=\"container\">"
             "<div style=\"display:flex;justify-content:space-between;align-items:center;"
             "flex-wrap:wrap;gap:1rem\">"
@@ -127,13 +133,36 @@ def org_home_html(org, email, cards_html="", is_admin=False):
             "<div style=\"display:flex;gap:.5rem;flex-wrap:wrap\">"
             "<a class=\"btn btn-primary\" href=\"/members/globus/chat\">Chat</a>"
             "<a class=\"btn\" href=\"/members/connect\">Connect data</a>"
-            + admin_link +
+            + agents_link + admin_link +
             "<a class=\"btn\" href=\"/members/logout\">Sign out</a></div></div>"
             + (cards_html or
                "<p class=\"lead\" style=\"margin-top:1.4rem\">Your team workspace is "
                "being set up. Agents and chat appear here shortly.</p>")
             + "</div></section>")
     return _org_page(org, name + " · Globus", body)
+
+
+def org_no_agents_html(org, email):
+    """Shown when nothing has been shared with this employee yet.
+
+    An empty dashboard reads as "this is broken". Saying plainly that the
+    workspace is private by default, and who can change that, turns a
+    dead end into a next step."""
+    name = _org_name(org)
+    body = ("<section class=\"section\"><div class=\"container narrow\">"
+            "<span class=\"eyebrow\">" + name + " · Globus</span>"
+            "<h1>No shared agents yet</h1>"
+            "<p class=\"lead\">Your workspace is private by default. Nothing "
+            "is shared with you until an admin grants it — to everyone, to "
+            "your team, or to you personally.</p>"
+            "<p class=\"muted small\">Ask an admin of " + name + " to share an "
+            "agent from their Sharing console. Your own chat and connected "
+            "data are unaffected and available now.</p>"
+            "<p style=\"margin-top:1.4rem\">"
+            "<a class=\"btn btn-primary\" href=\"/members/globus/chat\">Go to chat</a> "
+            "<a class=\"btn\" href=\"/members/globus\">Back</a></p>"
+            "</div></section>")
+    return _org_page(org, name + " · Agents", body)
 
 
 _ORG_CHAT_JS = """

@@ -352,14 +352,23 @@ Landed:
   single-tenant install** (including when the org tables don't exist).
 - 📄 See INSTALL.md → "Enable an org portal".
 
-Next:
-
-- Shared-agent dashboard for orgs. This one needs real work: the org grant
-  model is per-slug, while this repo's agent runtime is DB-row based
-  (`globus_agent_runs`), so the run + render path has to be reconciled
-  against the grant set rather than ported as-is. Grants can already be
-  administered; they simply have no dashboard consuming them yet, so
-  `org_home_html` renders a placeholder in that slot.
+- ✅ **Shared agents for orgs — the grant model now has a consumer.** The
+  reconciliation turned out to be simpler than feared: agent runs are already
+  keyed by `member_email`, so employees are isolated for free, and the
+  dashboard renders from a catalog + status. So the org surface is the normal
+  one with the catalog **filtered by the employee's grant set**.
+  - **The run route re-authorizes.** Filtering the dashboard is presentation,
+    not access control — the single-tenant run handler knows nothing about
+    grants, so falling through to it would let any employee run any agent in
+    the catalog by posting its slug. `/members/globus/agents/run` checks the
+    grant set itself and 404s otherwise.
+  - **Admins see the whole catalog** without granting it to themselves,
+    otherwise the first admin of a new org faces an empty page and no way to
+    fill it.
+  - **No grants yet gets an explanation, not an empty page** — an empty
+    dashboard reads as "this is broken"; the page says the workspace is
+    private by default and who can change that. The home page hides the
+    Agents link entirely until something is shared.
 
 ## v0.8 (current) — Email intelligence
 
