@@ -455,6 +455,53 @@ read, so the built-in source reads this install's own outbound pipeline
 instead. Adding a per-vendor read (pagination, field hydration, rate limits) is
 real work and is left as a documented seam rather than faked.
 
+## v0.10 (current) — Opportunity tracker
+
+Any pursuit you send into the world and then lose track of: job applications,
+partnership pitches, grant or CFP submissions, sponsorship asks. You send
+dozens, replies trickle back over weeks from addresses that look nothing like
+where you sent them, and "where does this stand?" quietly becomes "no idea".
+
+Records each outbound opportunity, reads **your** mailbox to match replies
+back to the right one, classifies what kind of reply it is, and reports the
+funnel plus what's gone quiet. **Read-only on mail; it never sends anything.**
+
+- ✅ **The distinction that carries the whole thing:** an automated screener or
+  assessment is a *response*, but it is **not** a human conversation. It's
+  checked FIRST, because the wording deliberately overlaps ("complete a short
+  assessment", "your video interview") and folding them together inflates the
+  one number you actually care about.
+- ✅ **Marketing is excluded outright.** Job alerts, newsletters and "we're
+  hiring!" blasts match a sender domain perfectly and would otherwise register
+  as replies from that company.
+- ✅ **Stages only move FORWARD.** Replies arrive out of order; a templated
+  acknowledgement landing after an interview invitation must not rewind the
+  funnel. Re-running over the same mail is a no-op.
+- ✅ **Conservative matching.** Sender domain is authoritative; name matching
+  requires two distinctive tokens (one only if that's all the org has), and
+  all-generic names like "The Solutions Company" never match. A wrong match
+  silently rewrites an unrelated opportunity's history — a miss just reads as
+  "no response yet", which is at least honest.
+- ✅ **Model fallback is OFF by default** — the patterns handle the vast
+  majority, and a tracker that silently costs money per inbound message is a
+  bad default. When on, an unparseable answer leaves the message unclassified
+  rather than guessing it into the funnel.
+- ✅ **Stale list, not auto-chasing.** Chasing is a judgment call, so it hands
+  you the candidates and stops. If you want outbound, Narada already does it
+  properly with suppression and per-send caps.
+- ✅ **Tests** — `tests/test_opportunity_tracker.py`, 46 hermetic checks.
+- 📄 See INSTALL.md → "Enable the opportunity tracker".
+
+**Deliberately not included.** The private system this is derived from also
+automates *acquiring* and *submitting* opportunities — logged-in scraping of a
+job board via a throwaway account, and driving third-party application forms
+end to end (including fetching emailed verification codes). Those are omitted
+on purpose: they violate the platforms' terms, the scraping half relies on a
+burner account precisely because it gets banned, and mass-submitting forms
+without a human reading them is not a thing this project should hand out. What
+generalises — and what's here — is the record-keeping and the reply
+classification.
+
 ## v1.0 — production-ready
 
 Shipped:

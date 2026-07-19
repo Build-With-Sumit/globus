@@ -615,3 +615,44 @@ CREATE TABLE IF NOT EXISTS email_intel (
   KEY ix_account_processed (account, processed_at),
   KEY ix_urgency_open (urgency, resolved_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- ─────────────────────────────────────────────────────────────────────
+-- Opportunity tracker (see server/opportunity_tracker.py)
+-- ─────────────────────────────────────────────────────────────────────
+-- One row per outbound pursuit (job application, pitch, grant, CFP...) and an
+-- append-only history of how it moved. Stages only ever move FORWARD, so a
+-- templated acknowledgement arriving after an interview can't rewind it.
+CREATE TABLE IF NOT EXISTS opportunities (
+  id                BIGINT AUTO_INCREMENT PRIMARY KEY,
+  member_email      VARCHAR(320) NOT NULL,
+  slug              VARCHAR(190) NOT NULL,   -- your stable id for this pursuit
+  org               VARCHAR(255) NOT NULL,   -- who you approached
+  title             VARCHAR(255) NULL,       -- role / subject of the pitch
+  url               VARCHAR(1024) NULL,
+  domain            VARCHAR(255) NULL,       -- authoritative reply matcher
+  stage             ENUM('queued','submitted','replied','screener',
+                         'interview','offer','rejected','closed')
+                    NOT NULL DEFAULT 'queued',
+  stage_updated_at  TIMESTAMP NULL,
+  submitted_at      TIMESTAMP NULL,
+  source            VARCHAR(120) NULL,
+  notes             TEXT NULL,
+  created_at        TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at        TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                    ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uniq_member_slug (member_email, slug),
+  KEY ix_member_stage (member_email, stage),
+  KEY ix_domain (domain)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS opportunity_events (
+  id              BIGINT AUTO_INCREMENT PRIMARY KEY,
+  opportunity_id  BIGINT NOT NULL,
+  stage           VARCHAR(32) NOT NULL,
+  at              TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  actor           VARCHAR(64) NULL,
+  detail          VARCHAR(500) NULL,
+  KEY ix_opp (opportunity_id, at),
+  CONSTRAINT fk_opp_events FOREIGN KEY (opportunity_id)
+    REFERENCES opportunities(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

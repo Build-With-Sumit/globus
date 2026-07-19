@@ -497,6 +497,50 @@ sales_desk.register_source("mycrm", lambda member_email, limit: [
 python tests/test_sales_desk.py
 ```
 
+## 13. (optional) Enable the opportunity tracker
+
+Track what you sent out — job applications, pitches, grants, CFPs — and let
+replies find their way back to the right record. It reads a mailbox you've
+already connected; it never sends mail and never modifies it.
+
+```bash
+# record what you sent. --domain is the strongest reply matcher, so set it
+# when you know it.
+python3 scripts/opportunity_run.py add you@example.com acme-staff-eng \
+    "Acme Corp" --title "Staff Engineer" --domain acme.com --source referral
+
+# match replies from the last 14 days. --dry-run shows what WOULD change.
+python3 scripts/opportunity_run.py scan you@example.com you@example.com --dry-run
+python3 scripts/opportunity_run.py scan you@example.com you@example.com
+
+# funnel + what's gone quiet
+python3 scripts/opportunity_run.py report you@example.com
+```
+
+```cron
+0 7 * * *  cd /opt/globus && .venv/bin/python3 \
+    scripts/opportunity_run.py scan you@example.com you@example.com \
+    >> /var/log/globus-opportunities.log 2>&1
+```
+
+Notes worth knowing before you trust the numbers:
+
+- **A screener is not an interview.** Automated assessments and one-way video
+  steps are counted as `screener`, separately from `interview`, because
+  merging them inflates the number you actually care about.
+- **Stages only move forward.** A "thanks for applying" arriving after an
+  interview invite won't rewind anything, so ordering of replies doesn't
+  matter and re-running is safe.
+- **Matching prefers a miss to a wrong guess.** Set `--domain` where you can;
+  without it, an org whose name is entirely generic words won't match at all —
+  by design, since it would otherwise claim half the inbox.
+- `OPP_LLM_FALLBACK=1` adds a model pass for messages the patterns can't
+  place. Off by default so the tracker costs nothing per message.
+
+```bash
+python tests/test_opportunity_tracker.py
+```
+
 ## Upgrading
 
 ```bash
