@@ -129,6 +129,12 @@ members_auth_html.configure(site=SITE)
 import globus_auth  # noqa: E402
 globus_auth.configure(session_secret=SESSION_SECRET)
 
+# Org portals (optional multi-tenant employee workspaces). Dormant unless the
+# operator adds an `organizations` row — with none, org_for_host() returns None
+# for every Host and the server behaves as a plain single-tenant install.
+import org_db  # noqa: E402
+org_db.configure(db_read=db_read, db_write=db_write)
+
 # Google OAuth (Drive sync) — only relevant if GOOGLE_OAUTH_CLIENT_ID/SECRET
 # are set in the config table. configure() always runs; the helpers raise a
 # friendly RuntimeError if a client tries to start the flow without keys.
@@ -152,8 +158,19 @@ from globus_orchestrator import (  # noqa: E402
     GLOBUS_DAILY_CAP,
 )
 from globus_auth import (  # noqa: E402
-    request_code, verify_code, parse_session_cookie,
+    request_code, request_org_code, verify_code, parse_session_cookie,
 )
+from org_db import (  # noqa: E402
+    DENY as ORG_DENY, org_for_host, org_member_active, is_org_admin,
+    domain_matches_org, auto_enroll, agent_grants_for, list_grants,
+    grant_agent, revoke_grant, list_org_members, set_member_department,
+    set_member_role,
+)
+from org_portal_html import (  # noqa: E402
+    org_login_html, org_code_html, org_home_html, org_chat_html,
+    org_connect_html, org_admin_html, org_privacy_html, org_terms_html,
+)
+from globus_agents_catalog import GLOBUS_AGENTS_CATALOG  # noqa: E402
 from auth_cookies import make_cookie, CLEAR_COOKIE  # noqa: E402
 from google_oauth import (  # noqa: E402
     create_oauth_state, consume_oauth_state,
@@ -654,9 +671,264 @@ class Handler(BaseHTTPRequestHandler):
         return {"kind": "error", "msg": f"unknown action: {action}"}
 
     # ---- GET ----
+    # ─────────────────────────────────────────────────────────────────
+    # Org portals — the host gate
+    # ─────────────────────────────────────────────────────────────────
+    # On an org host the request is served ONLY by the org plane below and
+    # never falls through to the single-tenant ladder. That is the whole
+    # isolation property: employees of one company must not be able to reach
+    # the operator's own member surfaces by walking URLs.
+    #
+    # The exception is this small allow-list of routes that are already
+    # per-email scoped and carry no single-tenant surface — sharing them
+    # beats duplicating them, and each is only reachable AFTER the employee
+    # is confirmed to be an active member of this org.
+    _ORG_SHARED_GET = frozenset({
+        "/members/connect/google/callback",
+        "/api/globus/vault-progress",
+    })
+    _ORG_SHARED_POST = frozenset({
+        "/members/globus/chat",
+        "/members/connect/google/sync",
+        "/members/connect/google/disconnect",
+        "/api/globus/client-error",
+    })
+    _ORG_STATIC = frozenset({"/favicon.svg", "/styles.css", "/main.js"})
+
+    def _req_host(self):
+        """Arrival Host header, lower-cased and port-stripped."""
+        h = (self.headers.get("Host") or "").strip().lower()
+        if not h:
+            return ""
+        if h.startswith("["):                     # IPv6 literal, e.g. [::1]:8090
+            return h.split("]", 1)[0] + "]"
+        return h.split(":", 1)[0]
+
+    def _org_for_req(self):
+        """Resolve this request's Host to an org, ORG_DENY, or None.
+
+        Never raises. An unexpected failure denies ONLY for a host the operator
+        has explicitly named as an org portal, so a single-tenant install (where
+        the org tables may not even exist) is completely unaffected."""
+        host = self._req_host()
+        if not host:
+            return None
+        try:
+            return org_for_host(host)
+        except Exception:
+            for pair in (cfg("ORG_PORTAL_HOSTS", "") or "").split(","):
+                h, _, _slug = pair.strip().partition(":")
+                if h and h.strip().lower() == host:
+                    return ORG_DENY
+            return None
+
+    def _org_unavailable(self):
+        """A recognised org host we cannot resolve right now. Deliberately a
+        dead end — it must never fall through and serve the single-tenant site."""
+        return self._send_html(503,
+            "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"UTF-8\">"
+            "<title>Workspace unavailable</title></head><body>"
+            "<h1>Workspace temporarily unavailable</h1>"
+            "<p>This workspace can't be reached right now. "
+            "Please try again shortly.</p></body></html>")
+
+    def _org_404(self):
+        return self._send_html(404,
+            "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"UTF-8\">"
+            "<title>Not found</title></head><body><h1>Not found</h1>"
+            "</body></html>")
+
+    def _org_google_enabled(self):
+        v = (cfg("ORG_GOOGLE_LOGIN_ENABLED", "0") or "0").strip().lower()
+        return v not in ("", "0", "false", "no", "off")
+
+    def _org_legal_kw(self):
+        return {"entity": cfg("ORG_LEGAL_ENTITY", "") or "",
+                "contact": cfg("ORG_LEGAL_CONTACT", "") or "",
+                "updated": cfg("ORG_LEGAL_UPDATED", "") or ""}
+
+    def _org_agent_options(self):
+        """The grantable universe an admin can share — this install's own
+        agent catalog, as (slug, label) pairs."""
+        return [(a.get("name"), a.get("role") or a.get("name"))
+                for a in GLOBUS_AGENTS_CATALOG if a.get("name")]
+
+    def _org_do_GET(self, org, parsed, route):
+        """Org-host GET plane. ALLOW-LIST: anything not named here 404s.
+        Returns the sentinel False to hand a shared route to the normal
+        handler; otherwise it has already written the response."""
+        if org is ORG_DENY:
+            return self._org_unavailable()
+
+        # ---- pre-auth ----
+        if route in self._ORG_STATIC:
+            return False
+        if route == "/api/health":
+            return self._send_json(200, {"ok": True, "app": "globus",
+                                         "org": org.get("slug")})
+        if route == "/privacy":
+            return self._send_html(200, org_privacy_html(org, **self._org_legal_kw()))
+        if route == "/terms":
+            return self._send_html(200, org_terms_html(org, **self._org_legal_kw()))
+        if route == "/members/logout":
+            return self._redirect("/members/globus",
+                                  [("Set-Cookie", CLEAR_COOKIE)])
+
+        email = self._member_email()
+        authed = bool(email) and org_member_active(email, org["id"])
+
+        if not authed:
+            if route.startswith("/api/"):
+                return self._send_json(401, {"error": "sign in"})
+            # A session cookie minted on another surface is NOT an identity
+            # here. Clear it, or the employee bounces between a valid cookie
+            # and a portal that keeps refusing them.
+            hdrs = [("Set-Cookie", CLEAR_COOKIE)] if email else None
+            return self._send_html(200, org_login_html(
+                org, show_google=self._org_google_enabled()), hdrs)
+
+        # ---- authenticated org surfaces ----
+        if route in ("/", "/members", "/members/globus"):
+            return self._send_html(200, org_home_html(
+                org, email, cards_html="",
+                is_admin=is_org_admin(email, org["id"])))
+
+        if route == "/members/globus/chat":
+            return self._send_html(200, org_chat_html(org, email, []))
+
+        if route == "/members/connect":
+            qs = parse_qs(parsed.query)
+            msg = (qs.get("msg") or [""])[0]
+            kind = (qs.get("kind") or [""])[0]
+            return self._send_html(200, org_connect_html(
+                org, email, list_oauth_connections_with_stats(email),
+                GLOBUS_MAX_CONNECTIONS_PER_MEMBER, message=msg,
+                message_kind=("error" if kind == "error" else "ok")))
+
+        if route == "/members/globus/admin":
+            # 404 rather than 403 for non-admins: the console's existence is
+            # not something a regular employee needs to learn about.
+            if not is_org_admin(email, org["id"]):
+                return self._org_404()
+            qs = parse_qs(parsed.query)
+            return self._send_html(200, org_admin_html(
+                org, email, list_org_members(org["id"]),
+                list_grants(org["id"]), self._org_agent_options(),
+                message=(qs.get("msg") or [""])[0]))
+
+        if route in self._ORG_SHARED_GET:
+            return False
+        return self._org_404()
+
+    def _org_do_POST(self, org, parsed, route):
+        """Org-host POST plane. Same allow-list discipline as _org_do_GET."""
+        if org is ORG_DENY:
+            return self._org_unavailable()
+
+        show_google = self._org_google_enabled()
+
+        # ---- pre-auth: sign in ----
+        if route == "/members/login":
+            form = self._form()
+            email = (form.get("email") or "").strip().lower()
+            if not EMAIL_RE.match(email):
+                return self._send_html(200, org_login_html(
+                    org, "Enter a valid work email.", show_google))
+            # Send only to a domain registered to THIS org, but answer
+            # identically either way — the sign-in page must not become a way
+            # to discover which companies use this install, or which of their
+            # addresses exist.
+            if domain_matches_org(email, org["id"]):
+                request_org_code(email, org["id"])
+            return self._send_html(200, org_code_html(org, email))
+
+        if route == "/members/verify":
+            form = self._form()
+            email = (form.get("email") or "").strip().lower()
+            code = (form.get("code") or "").strip()
+            bad = "That code is wrong or has expired."
+            if not EMAIL_RE.match(email) or not code.isdigit() or len(code) != 6:
+                return self._send_html(200, org_code_html(org, email, bad))
+            # Re-assert the domain at verify time too: a code minted while the
+            # domain was registered must not survive its removal.
+            if not domain_matches_org(email, org["id"]):
+                return self._send_html(200, org_code_html(org, email, bad))
+            if not verify_code(email, code):
+                return self._send_html(200, org_code_html(org, email, bad))
+            if not auto_enroll(email, org["id"], email.rsplit("@", 1)[-1]):
+                return self._send_html(200, org_code_html(
+                    org, email, "Couldn't complete enrollment — try again."))
+            return self._redirect("/members/globus",
+                                  [("Set-Cookie", make_cookie(email))])
+
+        email = self._member_email()
+        authed = bool(email) and org_member_active(email, org["id"])
+        if not authed:
+            if route.startswith("/api/"):
+                return self._send_json(401, {"error": "sign in"})
+            return self._redirect("/members/globus")
+
+        # ---- self-connect (the org page POSTs; the single-tenant one GETs) ----
+        if route == "/members/connect/google/start":
+            if count_oauth_connections(email) >= GLOBUS_MAX_CONNECTIONS_PER_MEMBER:
+                return self._redirect(
+                    "/members/connect?kind=error&msg="
+                    + quote(f"Maximum of {GLOBUS_MAX_CONNECTIONS_PER_MEMBER} "
+                            "Google accounts reached."))
+            form = self._form()
+            sources = [s for s in ("drive", "gmail") if (form.get(s) or "").strip()]
+            if not sources:
+                return self._redirect(
+                    "/members/connect?kind=error&msg="
+                    + quote("Pick at least one source (Drive or Gmail)."))
+            try:
+                state = create_oauth_state(email, "google", ",".join(sources))
+                url = google_authorize_url(state, sources)
+            except RuntimeError as e:
+                return self._redirect(
+                    "/members/connect?kind=error&msg=" + quote(str(e)))
+            return self._redirect(url)
+
+        # ---- admin console ----
+        if route.startswith("/members/globus/admin/"):
+            if not is_org_admin(email, org["id"]):
+                return self._org_404()
+            form = self._form()
+            oid = org["id"]
+            action = route.rsplit("/", 1)[-1]
+            if action == "grant":
+                # the audience select encodes "<type>:<value>"
+                a_type, _, a_value = (form.get("audience") or "").partition(":")
+                grant_agent(oid, (form.get("agent") or "").strip(),
+                            a_type.strip(), a_value.strip(), email)
+            elif action == "revoke":
+                gid = (form.get("grant_id") or "").strip()
+                if gid.isdigit():
+                    revoke_grant(oid, int(gid))
+            elif action == "set-team":
+                set_member_department(
+                    oid, (form.get("email") or "").strip().lower(),
+                    (form.get("department") or "").strip())
+            elif action == "set-role":
+                set_member_role(oid, (form.get("email") or "").strip().lower(),
+                                (form.get("role") or "").strip())
+            else:
+                return self._org_404()
+            return self._redirect("/members/globus/admin?msg=" + quote("Saved."))
+
+        if route in self._ORG_SHARED_POST:
+            return False
+        return self._org_404()
+
     def do_GET(self):
         parsed = urlparse(self.path)
         route = parsed.path
+
+        org = self._org_for_req()
+        if org is not None:
+            handled = self._org_do_GET(org, parsed, route)
+            if handled is not False:
+                return handled
 
         if route in ("/", "/globus", "/index.html"):
             return self._send_html(200, public_globus_landing_html(
@@ -926,6 +1198,12 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         parsed = urlparse(self.path)
         route = parsed.path
+
+        org = self._org_for_req()
+        if org is not None:
+            handled = self._org_do_POST(org, parsed, route)
+            if handled is not False:
+                return handled
 
         # ---- Auth ----
         if route == "/members/login":

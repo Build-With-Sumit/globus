@@ -335,16 +335,31 @@ Landed:
   optional separate `ORG_GOOGLE_OAUTH_*` client, `ORG_GOOGLE_LOGIN_ENABLED`,
   legal-page identity.
 
+- ✅ **The portal itself** — host gate + routes + UI. Email one-time-code
+  sign-in (domain-gated, and it answers identically for an unregistered
+  domain so it can't be used to enumerate tenants or addresses), optional
+  "Continue with Google", employee chat, self-connect (Drive/Gmail), the
+  admin console (sharing grants + team/roles), and pre-auth legal pages
+  whose operator identity comes from config, defaulting to the org's name.
+- ✅ **Allow-list routing** — on an org host only the org plane answers;
+  anything not explicitly allow-listed 404s, so an org host can never serve
+  the operator's own single-tenant surfaces. A small set of already
+  per-email-scoped routes (chat API, Google connect callback/sync) is shared
+  rather than duplicated, and only after the employee is confirmed active.
+- ✅ **Tests** — `tests/test_org_gate.py`, 40 checks against the real handler
+  with stubbed I/O: deny-by-default, no-fall-through, non-admin 404s, no
+  tenant enumeration, and that the gate is a **no-op on a plain
+  single-tenant install** (including when the org tables don't exist).
+- 📄 See INSTALL.md → "Enable an org portal".
+
 Next:
 
-- Portal routes + UI on the host gate — login (email code / Google),
-  employee chat, self-connect, admin membership console, legal pages.
 - Shared-agent dashboard for orgs. This one needs real work: the org grant
   model is per-slug, while this repo's agent runtime is DB-row based
   (`globus_agent_runs`), so the run + render path has to be reconciled
-  against the grant set rather than ported as-is.
-- An INSTALL section once the portal actually serves — until then the
-  tables and data layer are deliberately undocumented as "enable it now".
+  against the grant set rather than ported as-is. Grants can already be
+  administered; they simply have no dashboard consuming them yet, so
+  `org_home_html` renders a placeholder in that slot.
 
 ## v1.0 — production-ready
 

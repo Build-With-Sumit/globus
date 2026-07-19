@@ -322,6 +322,63 @@ console + at `/members/globus/agents`.
 To fire on demand without cron: tap "Run now" on
 `/members/globus/agents`, or just ask Globus in chat ("run research").
 
+## 10. (optional) Enable an org portal
+
+"Globus for Organizations" gives one company its own host where employees
+**self-enroll with their company email** and each chats over their *own*
+connected data. It is entirely opt-in: with no `organizations` rows, none
+of this runs and your install stays exactly as it is.
+
+On an org host only the org pages are served — the single-tenant surfaces
+(`/members/narada`, `/members/globus/agents`, …) return 404 there.
+
+```sql
+-- 1. the org, and the host that serves its portal
+INSERT INTO organizations (slug, name, portal_host)
+VALUES ('acme', 'Acme Inc', 'globus.acme.com');
+
+-- 2. the email domain(s) that authorize self-enrollment.
+--    Matching is EXACT — 'acme.com' does not admit 'acme.com.evil.com',
+--    and each domain may belong to only one org.
+INSERT INTO org_domains (org_id, domain)
+VALUES ((SELECT id FROM organizations WHERE slug='acme'), 'acme.com');
+
+-- 3. seed one admin so somebody can reach the sharing console.
+--    Everyone else is created automatically on their first sign-in.
+INSERT INTO org_members (org_id, email, role)
+VALUES ((SELECT id FROM organizations WHERE slug='acme'),
+        'admin@acme.com', 'admin');
+```
+
+Then point DNS + your reverse proxy for `globus.acme.com` at the same
+Globus process (no second deployment) and restart. Employees go to
+`https://globus.acme.com`, enter their `@acme.com` address, and get a
+6-digit code.
+
+Optional `.env` knobs (all documented in `config/.env.example`):
+
+- `ORG_PORTAL_HOSTS=globus.acme.com:acme` — a fail-closed fallback so a
+  recognised org host still refuses rather than falling through to the
+  single-tenant site during a DB blip. Recommended.
+- `ORG_GOOGLE_LOGIN_ENABLED=1` — show "Continue with Google". Only turn
+  this on if the tenant really is on Google Workspace; otherwise the
+  email-code flow is the correct (and default) path.
+- `ORG_GOOGLE_OAUTH_CLIENT_ID` / `_SECRET` — a separate OAuth client for
+  org sign-in. Falls back to your main client when unset.
+- `ORG_LEGAL_ENTITY` / `ORG_LEGAL_CONTACT` / `ORG_LEGAL_UPDATED` — shown on
+  the pre-auth `/privacy` and `/terms` pages that the Google consent screen
+  links. Entity defaults to the org's name; blank contact/date are omitted.
+  The shipped wording is a plain baseline — have your own counsel review it.
+
+Sharing is **private by default**: a new employee sees no shared agents
+until an admin grants one at `/members/globus/admin` (to everyone, a team,
+or one person). Verify the isolation rules with:
+
+```bash
+python tests/test_org_db.py     # membership + domain + grant rules
+python tests/test_org_gate.py   # routing: deny-by-default, no fall-through
+```
+
 ## Upgrading
 
 ```bash

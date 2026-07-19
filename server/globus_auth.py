@@ -53,12 +53,13 @@ def _code_hash(code):
                     hashlib.sha256).hexdigest()
 
 
-def request_code(email):
-    """Email a one-time code to `email` if they're an active member.
-    Returns True if the email was sent (or logged to stderr in dev mode).
-    Returns False if rate-limited (5 codes per hour) or not a member."""
-    if not is_active_member(email):
-        return False
+def _issue_code(email):
+    """Rate-limit, mint, store and send a one-time code.
+
+    The CALLER is responsible for authorizing `email` first — this helper
+    deliberately performs no authorization of its own, so that each entry
+    point states its own rule (an existing member for the single-tenant
+    site; a registered org email domain for an org portal)."""
     rows = db_read("SELECT COUNT(*) AS c FROM auth_codes WHERE email=%s "
                    "AND created_at > (NOW() - INTERVAL 1 HOUR)", (email,))
     if rows and (rows[0].get("c") or 0) >= 5:
@@ -71,6 +72,30 @@ def request_code(email):
              "VALUES (%s, %s, DATE_ADD(NOW(), INTERVAL 10 MINUTE))",
              (email, _code_hash(code)))
     return send_otp_email(email, code)
+
+
+def request_code(email):
+    """Email a one-time code to `email` if they're an active member.
+    Returns True if the email was sent (or logged to stderr in dev mode).
+    Returns False if rate-limited (5 codes per hour) or not a member."""
+    if not is_active_member(email):
+        return False
+    return _issue_code(email)
+
+
+def request_org_code(email, org_id):
+    """Org-portal variant: authorize by the org's registered email DOMAIN
+    rather than an existing `members` row, because org portals are
+    self-enrolling — an employee's first ever sign-in has no record yet.
+
+    Domain-gating is what keeps this from becoming an open mailer: a code is
+    only ever sent to an address whose domain the operator registered against
+    this org. Enrollment itself happens after the code is verified, never here.
+    """
+    from org_db import domain_matches_org      # local: keeps org support optional
+    if not domain_matches_org(email, org_id):
+        return False
+    return _issue_code(email)
 
 
 def verify_code(email, code):
