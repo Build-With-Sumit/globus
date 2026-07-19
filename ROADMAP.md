@@ -308,6 +308,44 @@ unlock first:
 Each is ~1-2 hours of plugin work once credentials are in. No
 architecture changes after Phase 0 + 1.
 
+## v0.7 (in progress) — Globus for Organizations
+
+Optional multi-tenant **employee portals**: one company gets its own host
+(e.g. `globus.acme.com`) where employees self-enroll with their company
+email, and each chats with Globus grounded strictly on their OWN connected
+data. Entirely opt-in — with no `organizations` rows the server behaves
+exactly as the single-tenant install it is today.
+
+Landed:
+
+- ✅ **Isolation data layer** — `server/org_db.py`. Authorization on an org
+  host is `(arrival Host → org_id) INTERSECT (email is an active
+  org_member)`; it never consults the single-tenant member check. Every
+  predicate **fails closed** (a DB error denies), a suspended org denies
+  rather than falling through to the single-tenant site, domain matching is
+  exact (no `acme.com.evil.com` confusion), and `auto_enroll` writes only
+  `org_members` so an employee never becomes a single-tenant member.
+- ✅ **Schema** — `organizations`, `org_domains`, `org_members`,
+  `org_agent_grants`, shipped data-free.
+- ✅ **Default-private agent sharing** — an employee sees an agent only once
+  an admin grants it to everyone, their department, or them personally.
+- ✅ **Tests** — `tests/test_org_db.py` covers the isolation properties
+  above (31 checks, hermetic: no DB or network).
+- ✅ **Config knobs** — `ORG_PORTAL_HOSTS` (fail-closed host→slug fallback),
+  optional separate `ORG_GOOGLE_OAUTH_*` client, `ORG_GOOGLE_LOGIN_ENABLED`,
+  legal-page identity.
+
+Next:
+
+- Portal routes + UI on the host gate — login (email code / Google),
+  employee chat, self-connect, admin membership console, legal pages.
+- Shared-agent dashboard for orgs. This one needs real work: the org grant
+  model is per-slug, while this repo's agent runtime is DB-row based
+  (`globus_agent_runs`), so the run + render path has to be reconciled
+  against the grant set rather than ported as-is.
+- An INSTALL section once the portal actually serves — until then the
+  tables and data layer are deliberately undocumented as "enable it now".
+
 ## v1.0 — production-ready
 
 Shipped:

@@ -522,3 +522,68 @@ CREATE TABLE IF NOT EXISTS globus_agent_runs (
   KEY ix_email_started (member_email, started_at),
   KEY ix_status (status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- ─────────────────────────────────────────────────────────────────────
+-- Globus for Organizations (optional multi-tenant employee portals)
+-- ─────────────────────────────────────────────────────────────────────
+-- Dormant until you add an `organizations` row: with none, the server is a
+-- normal single-tenant install. See org_db.py + INSTALL.md ("Enable an org
+-- portal"). Shipped DATA-FREE — add your own org, its domains, and a seed
+-- admin via SQL. FK order matters: organizations before its children.
+
+CREATE TABLE IF NOT EXISTS organizations (
+  id           BIGINT NOT NULL AUTO_INCREMENT,
+  slug         VARCHAR(64) NOT NULL,
+  name         VARCHAR(255) NOT NULL,
+  portal_host  VARCHAR(255) NULL,               -- the Host that serves this org's portal
+  status       ENUM('active','suspended') NOT NULL DEFAULT 'active',
+  created_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_org_slug (slug),
+  UNIQUE KEY uq_org_portal_host (portal_host)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Email domains that authorize self-enrollment into an org. Globally unique,
+-- so a domain maps to at most one org.
+CREATE TABLE IF NOT EXISTS org_domains (
+  id          BIGINT NOT NULL AUTO_INCREMENT,
+  org_id      BIGINT NOT NULL,
+  domain      VARCHAR(255) NOT NULL,
+  created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_domain (domain),
+  KEY idx_org (org_id),
+  CONSTRAINT fk_org_domains_org FOREIGN KEY (org_id) REFERENCES organizations(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- One row per employee per org. Auto-created on a verified domain-matched
+-- login. Deliberately NOT joined to the single-tenant `members` table.
+CREATE TABLE IF NOT EXISTS org_members (
+  org_id      BIGINT NOT NULL,
+  email       VARCHAR(320) NOT NULL,
+  role        VARCHAR(64) NOT NULL DEFAULT 'employee',   -- 'employee' | 'admin'
+  department  VARCHAR(120) NULL,
+  status      ENUM('active','suspended','removed') NOT NULL DEFAULT 'active',
+  joined_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (org_id, email),
+  KEY idx_email (email),
+  KEY idx_org_status (org_id, status),
+  CONSTRAINT fk_org_members_org FOREIGN KEY (org_id) REFERENCES organizations(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Default-private agent sharing: an employee sees an agent only if an admin
+-- grants it to everyone ('all'), their department, or their email ('member').
+CREATE TABLE IF NOT EXISTS org_agent_grants (
+  id             BIGINT NOT NULL AUTO_INCREMENT,
+  org_id         BIGINT NOT NULL,
+  agent_slug     VARCHAR(64) NOT NULL,
+  audience_type  ENUM('all','department','member') NOT NULL,
+  audience_value VARCHAR(320) NOT NULL DEFAULT '',       -- department name / member email; '' for 'all'
+  created_by     VARCHAR(320) NULL,
+  created_at     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_grant (org_id, agent_slug, audience_type, audience_value),
+  KEY idx_org (org_id),
+  CONSTRAINT fk_grants_org FOREIGN KEY (org_id) REFERENCES organizations(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
