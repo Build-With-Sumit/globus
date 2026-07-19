@@ -379,6 +379,66 @@ python tests/test_org_db.py     # membership + domain + grant rules
 python tests/test_org_gate.py   # routing: deny-by-default, no fall-through
 ```
 
+## 11. (optional) Enable email intelligence
+
+Two passes over a mailbox you've already connected under
+`/members/connect` (Gmail source). A cheap **triage** pass files mail into
+your taxonomy; a **reason** pass reads the full body of only what triage
+couldn't recognise and records a judgment. A daily **digest** rolls it up.
+
+Neither pass can archive, move or delete mail — the only Gmail write they
+can reach is "add label" — and nothing here ever sends email.
+
+**Write `EMAIL_INTEL_CONTEXT` first.** It is a free-text paragraph saying
+what your business is, who matters, and what counts as urgent. It ships
+empty on purpose: with no context the reasoner flags plausible-looking
+noise and misses the mail that actually matters. Everything else has a
+working default.
+
+```bash
+# Try it against a real mailbox without writing anything — no labels,
+# no rows, no heartbeat.
+EMAIL_INTEL_DRYRUN=1 python3 scripts/email_intel_run.py reason you@example.com
+```
+
+Then wire the crons. **One line per mailbox** — a separate process per
+mailbox means a dead OAuth token on one can't take the others down, and
+each stamps its own proof-of-life so the digest can name exactly which one
+stopped:
+
+```cron
+# Tier 1 — cheap, every 30 min. The lookback is WIDER than the interval, so a
+# run skipped by lock contention is recovered by the next one.
+0,30 * * * * cd /opt/globus && flock -n /tmp/eintel-t1-a.lock \
+    .venv/bin/python3 scripts/email_intel_run.py triage you@example.com \
+    >> /var/log/globus-email-intel.log 2>&1
+
+# Tier 2 — hourly, on a minute offset clear of Tier 1 so the grace window
+# holds (EMAIL_INTEL_GRACE_MIN must exceed the gap between the two slots).
+20 * * * *   cd /opt/globus && flock -n /tmp/eintel-t2-a.lock \
+    .venv/bin/python3 scripts/email_intel_run.py reason you@example.com \
+    >> /var/log/globus-email-intel.log 2>&1
+
+# Digest — once a day.
+30 2 * * *   cd /opt/globus && .venv/bin/python3 \
+    scripts/email_intel_run.py digest \
+    >> /var/log/globus-email-intel.log 2>&1
+```
+
+Set `EMAIL_INTEL_ACCOUNTS` to exactly the mailboxes your `reason` crons
+cover. If it lists a mailbox no cron feeds, the digest will correctly
+report that mailbox as **PIPELINE DOWN** rather than quietly implying all
+is well — that gating is the point, so fix the list or the cron rather
+than muting it.
+
+Delivery goes to Telegram when `EMAIL_INTEL_TELEGRAM_MEMBER` +
+`EMAIL_INTEL_TELEGRAM_CHAT_ID` are set (see `server/telegram_bot.py`);
+otherwise the digest prints to stdout and cron captures it to the log.
+
+```bash
+python tests/test_email_intel.py   # heartbeat gate, parse failures, chunking
+```
+
 ## Upgrading
 
 ```bash

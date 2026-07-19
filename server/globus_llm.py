@@ -67,10 +67,19 @@ def globus_call_claude_oauth(system, messages, max_tokens=2000, tools=None,
         return json.loads(r.read().decode("utf-8"))
 
 
-def globus_call_chat(system, messages, max_tokens=2000, tools=None):
+def globus_call_chat(system, messages, max_tokens=2000, tools=None,
+                      model=None):
     """Dispatcher: picks the LLM provider for Globus chat/voice based on
     config flag GLOBUS_LLM_PROVIDER (DB cfg, env fallback). Falls back to
     DeepSeek if the preferred provider fails — so voice/chat never dies.
+
+    `model` PINS the model tier for this one call. Leave it None for the
+    interactive chat/voice path (which follows GLOBUS_OAUTH_MODEL), but pass
+    it explicitly from any BATCH caller — a background job that inherits the
+    chat brain's tier silently changes cost and behaviour the moment someone
+    retunes chat, and being a batch job, nothing tells you. Cheap, bulk work
+    (e.g. classifying a mailbox) should pin a small model; only work that
+    genuinely needs judgement should pin a large one.
 
       claude-oauth (default) → Claude Sonnet via local OAuth proxy
                                (subscription, zero API spend)
@@ -90,7 +99,7 @@ def globus_call_chat(system, messages, max_tokens=2000, tools=None):
     try:
         return globus_call_claude_oauth(
             system, messages, max_tokens, tools,
-            model=cfg("GLOBUS_OAUTH_MODEL", "sonnet"))
+            model=(model or cfg("GLOBUS_OAUTH_MODEL", "sonnet")))
     except Exception as e:
         # Stay on Claude: fall back to the Anthropic API direct (Sonnet),
         # not DeepSeek, so the Globus brain is always Claude.

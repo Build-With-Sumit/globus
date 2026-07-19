@@ -587,3 +587,31 @@ CREATE TABLE IF NOT EXISTS org_agent_grants (
   KEY idx_org (org_id),
   CONSTRAINT fk_grants_org FOREIGN KEY (org_id) REFERENCES organizations(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- ─────────────────────────────────────────────────────────────────────
+-- Email intelligence — one judgment per message (see server/email_intel.py)
+-- ─────────────────────────────────────────────────────────────────────
+-- Written by the Tier-2 reasoner, read by the digest. `category` is
+-- deliberately free text, not an ENUM: the taxonomy is operator-defined and
+-- must be changeable without a migration.
+CREATE TABLE IF NOT EXISTS email_intel (
+  id              BIGINT AUTO_INCREMENT PRIMARY KEY,
+  account         VARCHAR(320) NOT NULL,   -- which mailbox (the tenancy key)
+  msg_id          VARCHAR(64)  NOT NULL,   -- provider message id
+  thread_id       VARCHAR(64)  NULL,
+  category        VARCHAR(120) NULL,
+  urgency         ENUM('none','low','medium','high') NOT NULL DEFAULT 'none',
+  action_summary  VARCHAR(500) NULL,       -- set only when urgency <> none
+  reasoning       TEXT         NULL,       -- kept for human review / audit
+  sender          VARCHAR(320) NULL,       -- denormalised so the digest
+  subject         VARCHAR(500) NULL,       -- needs no provider round-trip
+  received_at     TIMESTAMP    NULL,
+  processed_at    TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  resolved_at     TIMESTAMP    NULL,       -- set ONLY on confirmed delivery
+  -- Idempotency. Scoped by account because the same message id can legitimately
+  -- exist in two mailboxes. Makes every write an upsert, so a re-run refreshes
+  -- the judgment instead of duplicating it.
+  UNIQUE KEY uniq_account_msg (account, msg_id),
+  KEY ix_account_processed (account, processed_at),
+  KEY ix_urgency_open (urgency, resolved_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

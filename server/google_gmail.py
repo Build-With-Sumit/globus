@@ -90,6 +90,87 @@ def gmail_extract_body_text(payload):
     return ""
 
 
+def gmail_headers(payload):
+    """Gmail's header list → a plain dict, e.g. {'Subject': ..., 'From': ...}.
+    Gmail returns canonical capitalisation, so a straight dict is enough."""
+    return {h.get("name"): h.get("value")
+            for h in ((payload or {}).get("headers") or []) if h.get("name")}
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Labels — ADD-ONLY by construction
+# ─────────────────────────────────────────────────────────────────────
+# There is deliberately no "remove label" / "archive" / "delete" helper
+# here. Anything that files or triages a member's mail should be able to
+# ANNOTATE it and nothing else: removing INBOX archives a message, and a
+# classifier having a bad day would then silently bury real mail with no
+# trace for the member to find. Adding a label is always recoverable;
+# archiving on a false positive is the failure people actually notice.
+#
+# A feature that genuinely needs to move mail (e.g. rescuing a message out
+# of Spam) should add its own explicit, narrowly-scoped helper rather than
+# widening these.
+
+def gmail_list_labels(access_token):
+    """All labels on the mailbox → [{'id','name','type'}, ...]."""
+    url = f"{GMAIL_API}/users/me/labels"
+    req = Request(url, headers={"Authorization": "Bearer " + access_token})
+    with urlopen(req, timeout=30) as r:
+        return (json.loads(r.read().decode()).get("labels") or [])
+
+
+def gmail_ensure_label(access_token, name, cache=None):
+    """Return the id of the label `name`, creating it if absent.
+
+    Pass a dict as `cache` to reuse one labels.list across a whole run —
+    Gmail's per-user rate limit is easy to hit if every message re-lists.
+    The cache is updated in place when a label is created."""
+    if cache is None:
+        cache = {}
+    if not cache:
+        for lb in gmail_list_labels(access_token):
+            if lb.get("name"):
+                cache[lb["name"]] = lb.get("id")
+    if name in cache:
+        return cache[name]
+    body = json.dumps({"name": name,
+                       "labelListVisibility": "labelShow",
+                       "messageListVisibility": "show"}).encode()
+    req = Request(f"{GMAIL_API}/users/me/labels", data=body, method="POST",
+                  headers={"Authorization": "Bearer " + access_token,
+                           "Content-Type": "application/json"})
+    try:
+        with urlopen(req, timeout=30) as r:
+            lid = json.loads(r.read().decode()).get("id")
+    except Exception:
+        # Most likely a race: another worker created it between our list and
+        # our create. Re-read rather than failing the whole run.
+        cache.clear()
+        for lb in gmail_list_labels(access_token):
+            if lb.get("name"):
+                cache[lb["name"]] = lb.get("id")
+        return cache.get(name)
+    cache[name] = lid
+    return lid
+
+
+def gmail_add_labels(access_token, message_id, label_ids):
+    """Add labels to one message. Add-only: this never sends removeLabelIds,
+    so it cannot archive (remove INBOX), unstar, or delete. Returns True on
+    success. A no-op when `label_ids` is empty."""
+    ids = [i for i in (label_ids or []) if i]
+    if not ids:
+        return True
+    body = json.dumps({"addLabelIds": ids}).encode()
+    req = Request(f"{GMAIL_API}/users/me/messages/{message_id}/modify",
+                  data=body, method="POST",
+                  headers={"Authorization": "Bearer " + access_token,
+                           "Content-Type": "application/json"})
+    with urlopen(req, timeout=30) as r:
+        r.read()
+    return True
+
+
 # ─────────────────────────────────────────────────────────────────────
 # RFC-2822 date parser — used to fill `modified_at` so the inbox view
 # can ORDER BY date DESC. PyMySQL needs a real datetime, not the raw

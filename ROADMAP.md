@@ -361,6 +361,53 @@ Next:
   administered; they simply have no dashboard consuming them yet, so
   `org_home_html` renders a placeholder in that slot.
 
+## v0.8 (current) — Email intelligence
+
+Two cron'd passes over a connected Gmail mailbox, plus a daily roll-up.
+An inbox produces far more mail than anyone can read, but only a little of
+it needs a decision — so a cheap pass files what it recognises, and an
+expensive pass reads only what's left.
+
+- ✅ **Tier 1 — triage** (`email_intel.triage_mailbox`): a cheap model files
+  mail into an operator-defined taxonomy from `From`/`Subject`/snippet only,
+  in batches. Optional deterministic sender→label rules run first, because a
+  lookup table is cheaper, always right, and — the real reason — *consistent*:
+  a model spells the same vendor three ways across runs and the taxonomy
+  quietly fragments.
+- ✅ **Tier 2 — reason** (`email_intel.reason_mailbox`): a stronger model reads
+  the full body of only the mail Tier 1 left unfiled, judges it against the
+  operator's business context, and records `{category, urgency, action}` plus
+  one "needs action" label. Urgency is defined by *response time*, not tone —
+  marketing urgency is not urgency.
+- ✅ **The layer rule.** Tier 2 finds unfiled mail by asking whether a message
+  carries **any** Gmail user label (`Label_*` ids) — it couples to the
+  *existence of a decision*, never to Tier 1's taxonomy. Buckets can be added
+  or renamed freely, and a human filing something by hand removes it from
+  Tier 2's scope for free.
+- ✅ **Non-destructive by construction.** The only Gmail write available is
+  add-label; there is no archive/move/delete helper for these agents to reach
+  for. Nothing here ever sends email.
+- ✅ **Heartbeat-gated digest.** Every run stamps a per-mailbox beacon —
+  *including* the runs that find nothing — and the digest refuses to report
+  all-clear for any mailbox whose beacon is stale or absent, naming the dead
+  one and how long it's been. Without this, an empty table and a dead pipeline
+  are indistinguishable, and the digest sends a confident daily all-clear over
+  a pipeline that stopped weeks ago.
+- ✅ **Cost bounded under upstream failure.** The listing cap and the
+  model-call cap are separate knobs — *cap the spend, never the sight* — so a
+  small budget can't silently shorten the lookback window. Overflow is
+  announced and deferred, never dropped.
+- ✅ **Tests** — `tests/test_email_intel.py`, 41 hermetic checks (no DB, no
+  network, no LLM) over the heartbeat gate, parse-failure handling, digest
+  chunking, and env-flag parsing.
+- 📄 See INSTALL.md → "Enable email intelligence".
+
+Next:
+
+- A pluggable notifier interface (today: Telegram, else stdout).
+- Optional archiving as a separate, explicitly opted-in capability — never a
+  side effect of a taxonomy bucket.
+
 ## v1.0 — production-ready
 
 Shipped:
