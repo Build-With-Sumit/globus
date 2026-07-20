@@ -1,11 +1,11 @@
-"""Globus — main HTTP server entrypoint (v0.13.0).
+"""Globus — main HTTP server entrypoint (v0.14.0).
 
 Run:
     python3 server/globus_server.py
 
-v0.13.0 ships cited text/voice chat, connected vault sources, the OSS agent
-runner, and evidence-backed Truth Layer verdicts. See ROADMAP.md for the
-historical release slices and queued work.
+v0.14.0 ships cited text/voice chat, connected vault sources, the OSS agent
+runner, evidence-backed Truth Layer verdicts, and the local Consequence
+Firewall. See ROADMAP.md for the historical release slices and queued work.
 
 Module wiring order matters — see ARCHITECTURE.md § 2. This file
 boots config + .env → wires every server/*.py module via their
@@ -169,7 +169,7 @@ from org_db import (  # noqa: E402
     DENY as ORG_DENY, org_for_host, org_member_active, is_org_admin,
     domain_matches_org, auto_enroll, agent_grants_for, list_grants,
     grant_agent, revoke_grant, list_org_members, set_member_department,
-    set_member_role,
+    set_member_role, configured_org_portals, normalize_host_header,
 )
 from org_portal_html import (  # noqa: E402
     org_login_html, org_code_html, org_home_html, org_chat_html,
@@ -409,7 +409,7 @@ def _deep_health():
                                        "claude-oauth")}
 
     return (200 if overall_ok else 503), {
-        "ok": overall_ok, "app": "globus", "v": "0.13.0",
+        "ok": overall_ok, "app": "globus", "v": "0.14.0",
         "checks": checks,
     }
 
@@ -419,7 +419,7 @@ def _deep_health():
 # ─────────────────────────────────────────────────────────────────────
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "globus/0.13.0"
+    server_version = "globus/0.14.0"
 
     def log_message(self, fmt, *args):
         return
@@ -451,7 +451,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def _member_email(self):
         """Return the authenticated member email or '' if not signed in."""
-        return parse_session_cookie(self.headers.get("Cookie", ""))
+        return parse_session_cookie(
+            self.headers.get("Cookie", ""),
+            audience=self._req_host(),
+        )
 
     def _read_body(self, max_bytes=10 * 1024 * 1024):
         try:
@@ -702,13 +705,8 @@ class Handler(BaseHTTPRequestHandler):
     _ORG_STATIC = frozenset({"/favicon.svg", "/styles.css", "/main.js"})
 
     def _req_host(self):
-        """Arrival Host header, lower-cased and port-stripped."""
-        h = (self.headers.get("Host") or "").strip().lower()
-        if not h:
-            return ""
-        if h.startswith("["):                     # IPv6 literal, e.g. [::1]:8090
-            return h.split("]", 1)[0] + "]"
-        return h.split(":", 1)[0]
+        """Canonical arrival host, or an empty string when malformed."""
+        return normalize_host_header(self.headers.get("Host"))
 
     def _org_for_req(self):
         """Resolve this request's Host to an org, ORG_DENY, or None.
@@ -718,13 +716,14 @@ class Handler(BaseHTTPRequestHandler):
         the org tables may not even exist) is completely unaffected."""
         host = self._req_host()
         if not host:
-            return None
+            return ORG_DENY
         try:
             return org_for_host(host)
         except Exception:
-            for pair in (cfg("ORG_PORTAL_HOSTS", "") or "").split(","):
-                h, _, _slug = pair.strip().partition(":")
-                if h and h.strip().lower() == host:
+            for configured_host, _slug in configured_org_portals(
+                cfg("ORG_PORTAL_HOSTS", "")
+            ):
+                if configured_host == host:
                     return ORG_DENY
             return None
 
@@ -897,7 +896,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_html(200, org_code_html(
                     org, email, "Couldn't complete enrollment — try again."))
             return self._redirect("/members/globus",
-                                  [("Set-Cookie", make_cookie(email))])
+                                  [("Set-Cookie", make_cookie(
+                                      email, audience=self._req_host()))])
 
         email = self._member_email()
         authed = bool(email) and org_member_active(email, org["id"])
@@ -995,7 +995,7 @@ class Handler(BaseHTTPRequestHandler):
             deep = bool((qs.get("deep") or [""])[0])
             if not deep:
                 return self._send_json(
-                    200, {"ok": True, "app": "globus", "v": "0.13.0"})
+                    200, {"ok": True, "app": "globus", "v": "0.14.0"})
             return self._send_json(*_deep_health())
 
         # Static assets
@@ -1281,7 +1281,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_html(200, _code_page(email,
                                                         "Code wrong or expired."))
             return self._redirect("/members/globus",
-                                  [("Set-Cookie", make_cookie(email))])
+                                  [("Set-Cookie", make_cookie(
+                                      email, audience=self._req_host()))])
 
         # ---- Public preview chat (no auth, IP rate-limited) ----
         # Opt-in via GLOBUS_PUBLIC_CHAT_ENABLED. Default off — fresh
@@ -1431,7 +1432,20 @@ class Handler(BaseHTTPRequestHandler):
                     "error": f"daily cap reached ({GLOBUS_DAILY_CAP} "
                              f"messages); resets at 00:00 UTC"})
             try:
-                reply, usage = globus_chat_send(email, msg)
+                # Org agent grants also apply when an employee asks chat to
+                # invoke run_agent. The direct run route already re-authorizes
+                # the slug; pass the same target set into the dispatcher so
+                # chat cannot become an alternate path around that gate.
+                allowed_agent_names = (
+                    self._org_granted_slugs(email, org)
+                    if org is not None
+                    else None
+                )
+                reply, usage = globus_chat_send(
+                    email,
+                    msg,
+                    allowed_agent_names=allowed_agent_names,
+                )
                 return self._send_json(200, {"reply": reply, "usage": usage})
             except Exception as e:
                 return self._send_json(500,
@@ -1670,7 +1684,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    print(f"globus/0.13.0 booting on {HOST}:{PORT}", flush=True)
+    print(f"globus/0.14.0 booting on {HOST}:{PORT}", flush=True)
     print(f"  site:     {SITE}", flush=True)
     print(f"  db:       {DB_CFG['user']}@{DB_CFG['host']}:{DB_CFG['port']}/"
           f"{DB_CFG['database']}", flush=True)

@@ -1,7 +1,7 @@
 # Installing Globus
 
 > **Status: alpha.** The reference implementation runs in production at
-> buildwithsumit.com. This guide gets v0.13 running on your box — sign-in
+> buildwithsumit.com. This guide gets v0.14 running on your box — sign-in
 > via OTP, vault from Obsidian zip + Google Drive + Gmail + the
 > WhatsApp/Teams Chrome extension, text and voice chat (ElevenLabs;
 > see [`docs/voice-setup.md`](docs/voice-setup.md)), and a working
@@ -44,18 +44,19 @@ docker compose up -d
 
 ### Credential-free Mission Control
 
-The v0.13 verification and control surface can run independently of MySQL and
+The v0.14 verification and control surface can run independently of MySQL and
 provider configuration:
 
 ```bash
 python -m globus_truth
 ```
 
-Open <http://127.0.0.1:8765>, then click **Run verified business workflow**.
-The generated challenge independently reads back three local destination rows,
-allows one bounded local action from a healthy receipt, removes one row, then
-blocks the second action from the contradictory 3 → 2 read-back. It uses no
-LLM, API key, provider account, Docker runtime, or external network call.
+Open <http://127.0.0.1:8765>, then click **Stage generated approval request**.
+The generated challenge pauses with zero actions, requires an exact human
+decision, blocks a changed payload, executes the approved payload once behind
+current evidence, and blocks replay. The v0.13 **Run verified business
+workflow** challenge remains on the same page. Neither judge path needs an LLM,
+API key, provider account, Docker runtime, or external network call.
 
 The capability inventory on the same page is source-backed and separates
 `native`, `implemented/setup_required`, `bridge/catalog`, and `planned`.
@@ -291,7 +292,7 @@ one specific team. Define your own.
 
 ```bash
 python3 server/globus_server.py
-# globus/0.13.0 booting on 127.0.0.1:8090
+# globus/0.14.0 booting on 127.0.0.1:8090
 #   site:     https://globus.example.com
 #   db:       globus@127.0.0.1:3306/globus
 #   llm:      claude-oauth

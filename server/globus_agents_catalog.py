@@ -12,15 +12,16 @@ Required fields:
   - role:        one-line job title shown in the UI
   - summary:     paragraph shown in the catalog card
   - task_prompt: the actual prompt the agent runs against the chat
-                 orchestrator. The orchestrator has access to every
-                 tool the member has wired up (search_files, read_file,
-                 list_recent_emails, search_telegram, search_whatsapp).
+                 orchestrator. The runtime exposes only the exact tools
+                 declared in this entry's tool_allowlist.
                  Write this as a clear instruction to the LLM —
                  "produce a brief that does X, Y, Z."
   - schedule:    free-text — cron line OR on-demand OR human-readable
                  (cron parsing is the cron's job, not this catalog's)
   - data_sources: list of strings shown under "Data sources" in the UI
-  - capabilities: list of capability tags (`read`, `post-to-tg`, etc.)
+  - capabilities: display-only capability tags (`read`, `post-to-tg`, etc.)
+  - tool_allowlist: exact LLM tools this background agent may call.
+                    Missing, malformed, empty, and unknown grants fail closed.
   - can_do:      bullet list — what this agent CAN do
   - cannot_do:   bullet list — explicit boundaries (be honest!)
 
@@ -99,6 +100,14 @@ GLOBUS_AGENTS_CATALOG = [
             "Incidents (vault/auto/incident/, /bug/)",
         ],
         "capabilities": ["read"],
+        "tool_allowlist": [
+            "search_files",
+            "read_file",
+            "search_content",
+            "list_recent_emails",
+            "search_whatsapp",
+            "search_telegram",
+        ],
         "can_do": [
             "Read across all connected data sources",
             "Identify what changed since last brief",
@@ -146,6 +155,12 @@ GLOBUS_AGENTS_CATALOG = [
             _GMAIL_SOURCE,
         ],
         "capabilities": ["read"],
+        "tool_allowlist": [
+            "search_files",
+            "read_file",
+            "search_content",
+            "list_recent_emails",
+        ],
         "can_do": [
             "Daily pipeline review across all CRM workspaces",
             "Surface stalled / closing-soon / demo-no-close deals",
@@ -204,6 +219,13 @@ GLOBUS_AGENTS_CATALOG = [
             "Live plugin calls (Gmail reply detection, etc.)",
         ],
         "capabilities": ["read", "draft-copy", "send-on-approval"],
+        # Run-now produces a status brief. Interactive chat owns campaign
+        # creation, drafting, and sending, so this runtime grant excludes them.
+        "tool_allowlist": [
+            "narada_list_campaigns",
+            "narada_campaign_stats",
+            "narada_check_replies",
+        ],
         "can_do": [
             "Survey all campaigns + surface anything needing attention",
             "Pull fresh replies via the campaign's sender plugin",
@@ -249,6 +271,14 @@ GLOBUS_AGENTS_CATALOG = [
             "Cron run status",
         ],
         "capabilities": ["read", "post-to-tg"],
+        # The OSS task is draft-only. A health-check run cannot turn the
+        # display label above into Telegram write permission.
+        "tool_allowlist": [
+            "search_files",
+            "read_file",
+            "search_content",
+            "list_recent_emails",
+        ],
         "can_do": [
             "Monitor server uptime + service health",
             "Flag failed deploys, cron misses, db slowness",

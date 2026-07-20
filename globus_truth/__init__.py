@@ -1,6 +1,18 @@
 """Globus Mission Control: verified outcomes and gated actions for agent fleets."""
 
 from .action_gate import ActionGate, ActionGateAuditError, POLICIES
+from .approval_center import (
+    ApprovalAuditError,
+    ApprovalCenter,
+    ApprovalCenterError,
+    ApprovalNotFoundError,
+    OUTCOMES,
+    RISKS,
+)
+from .approval_challenge import (
+    resolve_approval_center_challenge,
+    stage_approval_center_challenge,
+)
 from .evaluator import Evaluation, evaluate_receipt
 from .outcome_challenge import (
     run_business_outcome_challenge,
@@ -18,8 +30,14 @@ from .storage import TruthRepository
 __all__ = [
     "ActionGate",
     "ActionGateAuditError",
+    "ApprovalAuditError",
+    "ApprovalCenter",
+    "ApprovalCenterError",
+    "ApprovalNotFoundError",
     "Evaluation",
+    "OUTCOMES",
     "POLICIES",
+    "RISKS",
     "TruthRepository",
     "TruthService",
     "evaluate_receipt",
@@ -29,5 +47,7 @@ __all__ = [
     "load_platform_registry",
     "run_business_outcome_challenge",
     "run_outcome_gate_challenge",
+    "resolve_approval_center_challenge",
+    "stage_approval_center_challenge",
 ]
-__version__ = "0.13.0"
+__version__ = "0.14.0"

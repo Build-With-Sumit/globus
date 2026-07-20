@@ -1,7 +1,7 @@
 {
   "schema_version": "1.0",
   "registry_id": "globus.platform",
-  "release": "0.13.0",
+  "release": "0.14.0",
   "description": "A source-backed inventory of Globus capabilities. Setup-required means code exists but does not imply that an account is connected or configured.",
   "status_definitions": {
     "native": "Implemented in this repository and usable without configuring an external provider for the capability itself.",

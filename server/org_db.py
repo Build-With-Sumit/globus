@@ -24,6 +24,9 @@ row appears for them only if they separately become a paying customer.
 """
 from __future__ import annotations
 
+import re
+from ipaddress import IPv4Address, IPv6Address, ip_address
+
 from db_helpers import cfg
 
 
@@ -35,6 +38,7 @@ _DB_WRITE = None
 # right now (DB error / suspended)". The gate treats it as deny-by-default —
 # serve the org login/unavailable page, NEVER fall through to the customer site.
 DENY = object()
+_DNS_LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 
 
 def configure(*, db_read, db_write):
@@ -51,6 +55,75 @@ def _domain_of(email):
     return email.rsplit("@", 1)[-1] if "@" in email else ""
 
 
+def normalize_host_header(value):
+    """Return one canonical host without a port, or ``""`` when malformed.
+
+    Bracketed IPv6 literals must have a closing bracket and, when present, a
+    numeric 1-65535 port. DNS names use strict ASCII labels; a single trailing
+    root dot is canonicalized away. Unbracketed IPv6 and userinfo are rejected.
+    """
+    if not isinstance(value, str):
+        return ""
+    raw = value.strip().lower()
+    if not raw or len(raw) > 320:
+        return ""
+
+    if raw.startswith("["):
+        matched = re.fullmatch(r"\[([^\[\]]+)\](?::([0-9]+))?", raw)
+        if matched is None:
+            return ""
+        address_text, port_text = matched.groups()
+        if "%" in address_text:
+            return ""
+        try:
+            address = ip_address(address_text)
+        except ValueError:
+            return ""
+        if not isinstance(address, IPv6Address):
+            return ""
+        if port_text is not None and not 1 <= int(port_text) <= 65535:
+            return ""
+        return f"[{address.compressed}]"
+
+    if raw.count(":") > 1:
+        return ""
+    if ":" in raw:
+        host, port_text = raw.rsplit(":", 1)
+        if not port_text.isdigit() or not 1 <= int(port_text) <= 65535:
+            return ""
+    else:
+        host = raw
+    host = host.removesuffix(".")
+    if not host or len(host) > 253 or "@" in host:
+        return ""
+
+    try:
+        address = ip_address(host)
+    except ValueError:
+        address = None
+    if isinstance(address, IPv4Address):
+        return address.compressed
+    if address is not None:
+        return ""
+
+    labels = host.split(".")
+    if any(not _DNS_LABEL.fullmatch(label) for label in labels):
+        return ""
+    return host
+
+
+def configured_org_portals(value):
+    """Parse ``host:slug`` pairs with the same host rules as live requests."""
+    result = []
+    for raw_pair in (value or "").split(","):
+        host_text, separator, slug = raw_pair.strip().rpartition(":")
+        host = normalize_host_header(host_text)
+        slug = slug.strip()
+        if separator and host and slug and len(slug) <= 128:
+            result.append((host, slug))
+    return result
+
+
 def org_for_host(host):
     """Resolve an arrival Host header to an org.
       -> {"id","slug"}  when host is an active org portal
@@ -58,7 +131,7 @@ def org_for_host(host):
                         (DB error or org suspended) — gate must deny, not fall through
       -> None           when host is a plain single-tenant host (unchanged behaviour)
     """
-    host = (host or "").strip().lower()
+    host = normalize_host_header(host)
     if not host:
         return None
     rows = _DB_READ("SELECT id, slug, name, status FROM organizations "
@@ -69,12 +142,13 @@ def org_for_host(host):
             return {"id": r["id"], "slug": r["slug"], "name": r.get("name")}
         return DENY                               # suspended org -> deny
     if rows is None:                                # DB ERROR -> fail closed via config
-        for pair in (cfg("ORG_PORTAL_HOSTS", "") or "").split(","):
-            h, _, slug = pair.strip().partition(":")
-            if h and h.strip().lower() == host:
+        for configured_host, slug in configured_org_portals(
+            cfg("ORG_PORTAL_HOSTS", "")
+        ):
+            if configured_host == host:
                 r2 = _DB_READ("SELECT id, slug, name FROM organizations "
                               "WHERE slug=%s AND status='active' LIMIT 1",
-                              (slug.strip(),))
+                              (slug,))
                 if r2:
                     return {"id": r2[0]["id"], "slug": r2[0]["slug"],
                             "name": r2[0].get("name")}

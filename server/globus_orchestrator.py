@@ -35,6 +35,11 @@ import sys
 from db_helpers import db_read, db_write
 from globus_llm import globus_call_chat
 from globus_tools_schema import GLOBUS_TOOLS
+from globus_tool_policy import (
+    ToolPolicyError,
+    normalize_tool_allowlist,
+    select_tool_schemas,
+)
 import globus_web_read  # keyless web+social reader (pure module)
 from globus_vault_db import (
     globus_get_vault, globus_messages, globus_log_message,
@@ -665,11 +670,42 @@ def _dispatch_narada(name, email, inp):
 
 def _run_tools_loop(system, msgs, email, max_tokens=2000,
                    log_prefix="globus-chat", max_iterations=None,
-                   keepalive_writer=None):
+                   keepalive_writer=None, allowed_tools=None,
+                   agent_name=None, allowed_agent_names=None):
     """Run the LLM tool-use loop. Returns (final_text, usage_dict,
     tools_called). msgs is mutated in place (assistant turns + tool
     results are appended). Single source of truth for both text-chat
-    and voice paths (when voice ports in v0.3)."""
+    and voice paths (when voice ports in v0.3).
+
+    ``allowed_tools=None`` preserves the complete interactive member-chat
+    surface. Background agents pass an explicit allowlist: only those schemas
+    are advertised, and the same boundary is rechecked immediately before
+    dispatch so a forged provider response cannot bypass it.
+    """
+    if agent_name and allowed_tools is None:
+        raise ToolPolicyError(
+            f"agent {agent_name!r} requires an explicit runtime tool allowlist"
+        )
+    selected_tools, effective_tool_names = select_tool_schemas(
+        GLOBUS_TOOLS, allowed_tools
+    )
+    effective_agent_names = normalize_tool_allowlist(
+        allowed_agent_names,
+        allow_none=True,
+        require_nonempty=False,
+        context="run_agent target allowlist",
+    )
+    execution_context = (
+        f"agent:{agent_name}" if agent_name else "interactive_member_chat"
+    )
+    if agent_name:
+        system += (
+            "\n\n## Enforced runtime tool boundary\n"
+            f"You are running as background agent `{agent_name}`. "
+            "The dispatcher permits only these tools for this run: "
+            + (", ".join(sorted(effective_tool_names)) or "(none)")
+            + ". Attempts to call any other tool are denied before execution."
+        )
     final_text = ""
     last_usage = {}
     tools_called = []
@@ -684,7 +720,7 @@ def _run_tools_loop(system, msgs, email, max_tokens=2000,
             except Exception: pass
         try:
             resp = globus_call_chat(system, msgs, max_tokens=max_tokens,
-                                    tools=GLOBUS_TOOLS)
+                                    tools=selected_tools)
         except Exception as e:
             final_text = f"(upstream error: {type(e).__name__}: {e})"
             break
@@ -720,7 +756,15 @@ def _run_tools_loop(system, msgs, email, max_tokens=2000,
                 inp = {}
             tools_called.append({"name": name, "input": inp})
             try:
-                if name == "search_files":
+                if name not in effective_tool_names:
+                    result = {
+                        "ok": False,
+                        "error": "tool_not_allowed",
+                        "tool": name,
+                        "context": execution_context,
+                    }
+                    iter_non_search_calls += 1
+                elif name == "search_files":
                     result = globus_search_files(email, inp.get("query", ""),
                                                  inp.get("limit", 5))
                     iter_searches += 1
@@ -786,8 +830,18 @@ def _run_tools_loop(system, msgs, email, max_tokens=2000,
                         subject_filter=inp.get("subject_filter"))
                     iter_non_search_calls += 1
                 elif name == "run_agent" and _AGENTS_AVAILABLE:
-                    result = agent_run_async(
-                        (inp.get("agent") or "").strip(), email)
+                    target_agent = (inp.get("agent") or "").strip()
+                    if (
+                        effective_agent_names is not None
+                        and target_agent not in effective_agent_names
+                    ):
+                        result = {
+                            "ok": False,
+                            "error": "agent_not_granted",
+                            "agent": target_agent,
+                        }
+                    else:
+                        result = agent_run_async(target_agent, email)
                     iter_non_search_calls += 1
                 elif name == "send_telegram_via_bot" and _TG_BOT_AVAILABLE:
                     result = send_via_member_bot(
@@ -871,13 +925,20 @@ def _run_tools_loop(system, msgs, email, max_tokens=2000,
     return final_text, last_usage, tools_called
 
 
-def globus_chat_send(email, user_msg):
+def globus_chat_send(
+    email,
+    user_msg,
+    allowed_tools=None,
+    agent_name=None,
+    allowed_agent_names=None,
+):
     """Send a user message + get a response. Returns (reply_text,
     usage_dict). Logs both user + assistant turns to globus_messages.
 
     This is the public entrypoint. POST /members/globus/send calls it
-    directly. Voice path (v0.3) will reuse _run_tools_loop with a
-    keepalive_writer to keep the WebSocket alive during tool turns."""
+    directly. Ordinary callers omit ``allowed_tools`` and retain the complete
+    member tool surface. The agent runner supplies an explicit allowlist and
+    agent name for deny-by-default execution."""
     pat = detect_injection(user_msg)
     if pat:
         log_security_event(email, user_msg, pat, "text")
@@ -910,7 +971,15 @@ def globus_chat_send(email, user_msg):
     msgs = [{"role": r["role"], "content": r["content"]} for r in history]
     msgs.append({"role": "user", "content": user_msg})
     final_text, last_usage, tools_called = _run_tools_loop(
-        system, msgs, email, max_tokens=2000, log_prefix="globus-chat")
+        system,
+        msgs,
+        email,
+        max_tokens=2000,
+        log_prefix="globus-chat",
+        allowed_tools=allowed_tools,
+        agent_name=agent_name,
+        allowed_agent_names=allowed_agent_names,
+    )
     globus_log_message(email, "user", user_msg)
     globus_log_message(email, "assistant", final_text)
     if tools_called:

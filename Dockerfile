@@ -4,7 +4,7 @@
 FROM python:3.12-slim AS app
 
 # Build-time hint so the image carries the version we shipped from.
-ARG GLOBUS_VERSION=0.13.0
+ARG GLOBUS_VERSION=0.14.0
 LABEL org.opencontainers.image.title="globus"
 LABEL org.opencontainers.image.version="${GLOBUS_VERSION}"
 LABEL org.opencontainers.image.source="https://github.com/Build-With-Sumit/globus"

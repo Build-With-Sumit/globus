@@ -20,7 +20,10 @@ cited chat, voice, connected data, and agents. For OpenAI Build Week, we used
 Codex with GPT-5.6 to add a new self-contained component called the **Globus
 Truth Layer**, wired it end to end into the public OSS agent runner, and
 extended it in v0.13 with **Mission Control**, a source-backed capability
-registry, and a fail-closed **Action Gate**.
+registry, and a fail-closed **Action Gate**. In v0.14 we added the
+**Consequence Firewall**: exact runtime tool grants for four built-in
+background agents plus a payload-free **Approval Center** whose human consent
+remains subordinate to fresh Truth.
 
 ## Important naming
 
@@ -179,7 +182,7 @@ The API supports:
 
 The local service:
 
-- Binds to loopback by default.
+- Binds only to loopback.
 - Does not grant CORS access.
 - Limits JSON bodies to 64 KiB.
 - Rejects duplicate JSON keys and non-finite numbers.
@@ -201,6 +204,7 @@ The dashboard shows:
 - Receipt measurements and evidence.
 - An ingest form for testing a receipt.
 - One-click loading of the five safe scenarios.
+- A human Approval Center with an exact-scope changed/exact/replay proof.
 - A 60-second Evidence Lab that writes, verifies, changes, and re-verifies
   actual local bytes.
 
@@ -227,14 +231,17 @@ only generated IDs, a relative filename, measurements, hashes, and verdicts.
 Every public OSS `AgentRunner` run that obtains a durable ledger ID follows the
 complete verification path:
 
-1. Globus records the start time and calls the real vault-aware orchestrator.
-2. The runner writes the generated Markdown brief as exact bytes.
-3. The adapter reopens the artifact and verifies its byte count and SHA-256.
-4. It checks the actual model reply for empty, too-short, refusal-like, and
+1. Globus records the start time and resolves the named built-in agent's exact
+   non-empty tool grant.
+2. The orchestrator advertises only those schemas, rechecks returned tool names
+   before dispatch, and runs the real vault-aware task.
+3. The runner writes the generated Markdown brief as exact bytes.
+4. The adapter reopens the artifact and verifies its byte count and SHA-256.
+5. It checks the actual model reply for empty, too-short, refusal-like, and
    error-like output without copying that private reply into the Truth database.
-5. It emits a receipt identified by an install-keyed HMAC member pseudonym.
-6. The deterministic evaluator returns and persists the verdict.
-7. The existing Agents dashboard and chat activity console show that verdict
+6. It emits a receipt identified by an install-keyed HMAC member pseudonym.
+7. The deterministic evaluator returns and persists the verdict.
+8. The existing Agents dashboard and chat activity console show that verdict
    separately from the process runner’s status.
 
 If the model call throws, Globus emits an explicit failed receipt. If the
@@ -317,9 +324,55 @@ Docker runtime, or network call. It returns safe generated IDs, a relative
 path, measurements, hashes, verdicts, decisions, and action counts—not row
 payloads or absolute paths.
 
-### 13. Automated tests
+### 13. The v0.14 Consequence Firewall and Approval Center
 
-The v0.13 hermetic Truth/Mission Control suite contains 93 tests covering:
+The Consequence Firewall adds two enforceable boundaries between an agent's
+plan and a consequential effect.
+
+First, the four shipped background agents have exact, deny-by-default runtime
+grants:
+
+- Research: `search_files`, `read_file`, `search_content`,
+  `list_recent_emails`, `search_whatsapp`, and `search_telegram`.
+- Sales Desk: `search_files`, `read_file`, `search_content`, and
+  `list_recent_emails`.
+- Narada: `narada_list_campaigns`, `narada_campaign_stats`, and
+  `narada_check_replies`.
+- Infra Watch: `search_files`, `read_file`, `search_content`, and
+  `list_recent_emails`.
+
+The model sees only the granted tool schemas, and the orchestrator checks the
+tool name again before dispatch. A forged disallowed call therefore cannot
+reach the tool implementation. These grants cover those four built-in
+background agents; they do not mean all 71 registry entries are governed,
+connected, or live.
+
+Second, the Approval Center stores an immutable exact proposal and human
+decision bound to a payload SHA-256. It stores identifiers, hashes, policy
+metadata, and timestamps—not the raw action payload. Human consent is
+necessary but not sufficient: immediately before a bounded callback, the
+center obtains and reads back a fresh Action Gate decision, atomically
+rechecks current Truth, and creates a unique local execution claim. Failed,
+contradictory, stale, or otherwise policy-ineligible Truth still blocks.
+
+The credential-free generated-local proof pauses with zero actions before
+review. After approval, a changed payload is blocked, the exact approved
+payload executes once behind fresh Truth, and an exact replay is blocked.
+Independent read-back ends with one local outbox row and zero external calls.
+Rejection executes nothing.
+
+The guarantee is deliberately narrow. The unique claim provides at-most-once
+callback invocation inside the local SQLite coordinator, not external
+exactly-once delivery. Real providers still need idempotency keys,
+acknowledgement read-back, and reconciliation. The generic API and CLI create,
+inspect, approve, and reject proposals but do not dispatch arbitrary
+callbacks. `requested_by` and `decided_by` are local audit labels rather than
+cryptographic identities; operating-system/process access to localhost is the
+trust boundary.
+
+### 14. Automated tests
+
+The v0.14 hermetic Truth/Mission Control suite covers:
 
 - Receipt evaluation and verdict precedence.
 - HTTP, dashboard, and strict JSON behavior.
@@ -328,6 +381,10 @@ The v0.13 hermetic Truth/Mission Control suite contains 93 tests covering:
 - Real AgentRunner adapter and member isolation.
 - Real-byte Evidence Lab verification.
 - Action Gate policy, binding, audit, idempotency, and failure behavior.
+- Exact background-agent grants, schema filtering, and dispatch rechecks.
+- Approval proposal/decision immutability, privacy, concurrency, fresh-Truth
+  enforcement, and local at-most-once claims.
+- The changed/exact/replay approval proof and loopback-only HTTP boundary.
 - Capability-registry schema, count, source, and secret-safety checks.
 - Verified-outcome success, contradiction, non-invocation, confinement, and
   concurrent-run behavior.
@@ -363,6 +420,8 @@ Codex with GPT-5.6 helped translate those lessons into:
 - The Mission Control dashboard.
 - The versioned, source-backed capability registry.
 - The immutable, fail-closed Action Gate.
+- The exact runtime grants for four built-in background agents.
+- The payload-free Approval Center and changed/exact/replay proof.
 - The credential-free verified business-outcome challenge.
 - The credential-free real-byte Evidence Lab.
 - The real OSS AgentRunner adapter and visible verdict integration.
@@ -395,11 +454,11 @@ They should not be represented as having been built with Codex or GPT-5.6.
 > The outcome is one of five explainable verdicts: healthy, verified no-work,
 > contradictory, failed, or stale.
 >
-> In Mission Control, the fastest proof is a generated business workflow. It
-> independently reads back three destination rows. Three claimed and three
-> observed is healthy, so the gate allows one local action. Then one row is
-> removed. Three claimed and two observed is contradictory, so the gate blocks
-> and the second action never runs. No LLM, API key, or external call.
+> In v0.14, the Consequence Firewall gives each built-in background agent an
+> exact tool grant. Its fastest proof pauses one generated high-risk action for
+> human review. After approval, a changed payload stays blocked, the exact
+> payload executes once behind a fresh Truth check, and a replay stays blocked.
+> No LLM, API key, or external call.
 >
 > Once the public Globus runner has a durable run ID, it writes the brief, reads
 > it back, verifies its SHA-256, and stores the receipt before the ledger can
@@ -411,9 +470,10 @@ They should not be represented as having been built with Codex or GPT-5.6.
 ### Reel screen cues
 
 1. Open on camera: “An agent saying done is making a claim.”
-2. Click **Run verified business workflow**.
-3. Show 3 → 3 healthy, allowed, and executed.
-4. Show 3 → 2 contradictory, blocked, and prevented.
+2. Click **Stage generated approval request**.
+3. Show the exact scope paused with zero actions before approval.
+4. Approve it, then show changed blocked, exact executed once, and replay
+   blocked.
 5. Briefly show one real public Globus agent and its Truth badge.
 6. Show the 71-capability registry disclosure: implemented is not connected.
 7. Show the complete hermetic test command passing in the terminal.
@@ -429,7 +489,8 @@ They should not be represented as having been built with Codex or GPT-5.6.
 > cited chat, voice, connected business data, and specialized agents.
 >
 > The work I built specifically for OpenAI Build Week is the Globus Truth
-> Layer and its v0.13 Mission Control and Action Gate, using Codex with GPT-5.6.
+> Layer, v0.13 Mission Control and Action Gate, and the v0.14 Consequence
+> Firewall and Approval Center, using Codex with GPT-5.6.
 >
 > The problem is simple: an agent saying “done” is only making a claim. A
 > polished answer does not prove that a database was updated, a file was
@@ -545,6 +606,27 @@ healthy/allowed/executed, then on 3 → 2 contradictory/blocked/prevented. Open
 one gate decision and point out the receipt, action, policy, verdict, and
 reason-code binding.
 
+### The Consequence Firewall and exact human approval
+
+> v0.14 narrows what an agent can even attempt. Research, Sales Desk, Narada,
+> and Infra Watch each receive an exact tool allowlist. The model sees only
+> those schemas, and the orchestrator checks every returned tool name again
+> before dispatch.
+>
+> For a high-risk action, the Approval Center pauses an exact payload
+> fingerprint for a person to approve or reject. Approval cannot override
+> Truth: execution still requires a fresh gate decision and a unique local
+> claim.
+>
+> The generated proof makes this visible. Before the click, nothing has
+> executed. After approval, a changed payload is blocked, the exact payload
+> executes once, and a replay is blocked. The local outbox ends with one row
+> and there are zero external calls.
+
+**Screen cue:** Click **Stage generated approval request**, show the pending
+exact scope, approve it, and hold on the three changed/exact/replay result
+cards.
+
 ### The 60-second Evidence Lab
 
 > A judge should not need our LLM key or MySQL configuration to see the core
@@ -577,7 +659,9 @@ values, and then open the healthy and contradictory receipts.
 > can inspect fleet totals, open a receipt, and understand exactly why the
 > system accepted or rejected it. Mission Control also exposes the validated
 > capability inventory, the verified-outcome challenge, and immutable gate
-> decisions through the same loopback service.
+> decisions through the same loopback-only service. The Approval Center API
+> can create, inspect, approve, and reject fixed-envelope proposals; it does
+> not execute an arbitrary callback.
 
 **Screen cue:** Show the dashboard detail panel, then briefly show an API JSON
 response.
@@ -585,6 +669,10 @@ response.
 ### The live Globus integration
 
 > The submitted public runner uses this contract after durable run creation.
+>
+> Before a built-in background-agent model call, the runner resolves that
+> agent's exact non-empty tool grant. Only those schemas are advertised, and a
+> second check happens before dispatch.
 >
 > After the orchestrator returns, the runner writes the Markdown brief as exact
 > bytes. The adapter reopens the file, checks its size and SHA-256, and scans
@@ -619,7 +707,8 @@ show the artifact hash check.
 >
 > The final suite covers the evaluator, storage, automatic aging,
 > command-line interface, HTTP surface, real runner adapter, member isolation,
-> and visible verdict rendering.
+> visible verdict rendering, exact runtime permissions, immutable approvals,
+> fresh-Truth execution, and replay blocking.
 
 **Screen cue:** Show the relevant Codex session, then run the test command and
 end on the complete passing summary.
@@ -629,18 +718,21 @@ end on the complete passing summary.
 > The broader Globus platform existed before Build Week and remains
 > Claude-native at runtime.
 >
-> The new Build Week work is the Truth Layer, Mission Control, Action Gate, and
-> the public OSS runner integration. In the included runner, an `ok` ledger
-> state requires a trusted persisted receipt; failures before receipt creation
-> remain explicitly non-green. I am not claiming that every private production
-> workflow already uses the same adapter.
+> The new Build Week work is the Truth Layer, Mission Control, Action Gate,
+> Consequence Firewall, Approval Center, and the public OSS runner integration.
+> In the included runner, an `ok` ledger state requires a trusted persisted
+> receipt; failures before receipt creation remain explicitly non-green. The
+> exact runtime grants currently govern four built-in background agents, not
+> every registry capability or private production workflow.
 >
 > It also is not a universal oracle that independently proves every external
 > event. It verifies the receipt's structure, measurements, timing, declared
 > checks, and supplied evidence metadata. The local outcome challenge does
 > independently read back its controlled destination, but that does not imply
 > every provider adapter is connected or every external service has the same
-> proof today.
+> proof today. The local unique execution claim is at-most-once coordination,
+> not external exactly-once delivery; real providers still need their own
+> idempotency and reconciliation.
 
 **Screen cue:** Return to camera for this section. The scope disclosure is more
 credible when spoken directly.
@@ -654,16 +746,18 @@ credible when spoken directly.
 >
 > That is what Globus Mission Control adds: an inspectable reliability contract
 > between an agent's claim and the operator who has to trust it, plus a gate
-> that can stop the next action when the evidence does not match.
+> that can stop the next action when the evidence does not match. The v0.14
+> Consequence Firewall also limits the tools a background agent can attempt and
+> keeps human approval subordinate to fresh Truth.
 
 ## Recommended visual shot list
 
 1. Globus product overview.
 2. Existing Agents dashboard.
 3. Mission Control capability counts and setup-state disclosure.
-4. Verified workflow before the click.
-5. 3 → 3 healthy, allowed, and executed.
-6. 3 → 2 contradictory, blocked, and prevented.
+4. Approval Center paused with the exact scope and zero actions.
+5. Consequence Firewall changed/exact/replay proof.
+6. Verified workflow 3 → 3 allowed and 3 → 2 blocked.
 7. One immutable Action Gate decision.
 8. Evidence Lab one-byte result and before/after hashes.
 9. Healthy and verified-no-work receipts.
@@ -690,6 +784,12 @@ credible when spoken directly.
 - “The outcome challenge independently reads a controlled local destination.”
 - “The healthy 3 → 3 receipt permits one bounded local action.”
 - “The contradictory 3 → 2 receipt blocks, so the second callback is not invoked.”
+- “Four built-in background agents have exact deny-by-default runtime tool
+  grants, with schema filtering and a dispatch recheck.”
+- “Human approval is bound to a payload hash and cannot override fresh Truth.”
+- “The generated approval proof blocks a changed payload, executes the exact
+  payload once locally, and blocks replay.”
+- “The Approval Center stores hashes and audit metadata, not action payloads.”
 - “The registry describes 71 source-backed capabilities; setup-required does
   not mean connected.”
 - “The public OSS AgentRunner cannot mark a run `ok` without a trusted,
@@ -708,7 +808,11 @@ credible when spoken directly.
 - “It is a trained truth model.”
 - “Globus has OpenClaw parity.”
 - “All 33 provider adapters are connected and ready on this install.”
+- “All 71 registry capabilities are governed by runtime grants.”
 - “Every consequential Globus action is already controlled by Action Gate.”
+- “Human approval guarantees an external action happens exactly once.”
+- “The `requested_by` and `decided_by` labels cryptographically authenticate a
+  person.”
 
 ## Demonstration commands
 
@@ -740,6 +844,15 @@ Run the business-outcome challenge without the browser:
 
 ```bash
 python -m globus_truth outcome-challenge --db globus-truth.db
+```
+
+Stage the generated-local Approval Center proof, then resolve it only after
+reviewing the returned proposal:
+
+```bash
+python -m globus_truth approval-challenge --db globus-truth.db
+python -m globus_truth approval-challenge --db globus-truth.db \
+  --proposal-id PROPOSAL_ID --decision approved
 ```
 
 Audit one decision against a persisted receipt:

@@ -109,8 +109,9 @@ voice_helpers   ◄─── (voice path + chat-page voice token)
 auth_cookies    ◄─── (members area routes)
 globus_llm      ◄─── (chat orchestrator + voice path + agents)
 globus_tools_schema ◄─── (chat orchestrator)
+globus_tool_policy ◄─── (schema filtering + dispatch authorization)
 agents_runtime  ◄─── (run_agent tool + agents dashboard)
-globus_agents_catalog ◄─── (agents UI + run_agent tool)
+globus_agents_catalog ◄─── (agents UI + run_agent tool + exact grants)
 globus_agents_helpers ◄─── (agents UI + brief viewer)
 
 agent_runner    ◄─── (OSS orchestrator + MySQL run row)
@@ -118,17 +119,21 @@ agent_runner    ◄─── (OSS orchestrator + MySQL run row)
    └── globus_truth.agent_adapter
           ├── evaluator      (deterministic receipt verdict)
           ├── service        (ingest + stale-aware reads)
-          ├── storage        (immutable receipt, verdict + decision history)
+          ├── storage        (immutable receipt, verdict, approval + claim history)
           ├── action_gate    (fail-closed policy authorization)
+          ├── approval_center (payload-free consent + fresh-Truth execution)
           ├── platform_registry (validated source-backed capability map)
           ├── judge_mode     (credential-free real-byte challenge)
-          └── outcome_challenge (read-back → receipt → gate proof)
+          ├── outcome_challenge (read-back → receipt → gate proof)
+          └── approval_challenge (changed/exact/replay local proof)
 ```
 
 ## Data flow — one chat turn
 
 1. Member POSTs `{message: "..."}` to `/api/globus/chat-send`.
-2. Handler authenticates the session cookie → `email`.
+2. Handler authenticates the HMAC session cookie for the exact normalized
+   arrival host → `email`; an org-portal session cannot be replayed on the
+   single-tenant host or another portal.
 3. Handler loads `vault = globus_vault_db.globus_get_vault(email)` —
    either the pre-built intelligence digest (preferred, cheap) or a
    raw aggregation of `globus_vault_sources` rows.
@@ -146,6 +151,8 @@ agent_runner    ◄─── (OSS orchestrator + MySQL run row)
    - exit when LLM returns plain text (no tool_calls)
    - empty-search backstop kicks in after 3 consecutive 0-hit search
      iterations → forced synth with `tools=None`
+   - member chat keeps its normal tool surface, but `run_agent` targets are
+     checked against the organization's granted agent slugs before delegation
 7. Handler scrubs DSML/tool-call markup from the final text
    (`_strip_tool_markup`).
 8. Handler logs assistant response to `globus_messages`, returns
@@ -155,22 +162,28 @@ agent_runner    ◄─── (OSS orchestrator + MySQL run row)
 
 1. `agent_runner.run_agent_for_member()` creates a durable, member-scoped
    MySQL run row and records an aware UTC start time.
-2. The real Globus orchestrator runs the catalog task over that member’s vault.
-3. The runner writes the Markdown brief as exact bytes and computes the
+2. The runner resolves that named built-in agent's explicit non-empty
+   `tool_allowlist`. A missing or empty grant fails closed before the model
+   call.
+3. `globus_tool_policy` filters the advertised schemas to that exact set. The
+   orchestrator rechecks every returned tool name before dispatch, so a forged
+   disallowed call cannot reach its implementation.
+4. The real Globus orchestrator runs the catalog task over that member’s vault.
+5. The runner writes the Markdown brief as exact bytes and computes the
    expected byte count and SHA-256.
-4. `globus_truth.agent_adapter` reopens the artifact and independently measures
+6. `globus_truth.agent_adapter` reopens the artifact and independently measures
    the bytes and digest.
-5. The adapter checks the actual model reply for empty, too-short,
+7. The adapter checks the actual model reply for empty, too-short,
    refusal-like, or error-like output. Private reply text is not copied into
    the Truth database.
-6. It emits a versioned receipt using an install-keyed HMAC member pseudonym
+8. It emits a versioned receipt using an install-keyed HMAC member pseudonym
    and a receipt ID deterministically bound to the durable MySQL run ID.
-7. The evaluator returns one of five explainable verdicts and stores the
+9. The evaluator returns one of five explainable verdicts and stores the
    immutable receipt plus verdict history in SQLite.
-8. The MySQL row becomes `ok` only for a trusted verdict. The status API sends
+10. The MySQL row becomes `ok` only for a trusted verdict. The status API sends
    only compact verdict metadata to the Agents dashboard and chat activity
    console.
-9. Later reads automatically age an otherwise trusted receipt to `stale` after
+11. Later reads automatically age an otherwise trusted receipt to `stale` after
    its freshness deadline; polling records history only if the verdict changes.
 
 ## Data flow — credential-free Evidence Lab
@@ -213,6 +226,64 @@ not provide the verdict they want evaluated.
 Decision-table update and delete triggers protect the audit trail. Exact
 decision retries are idempotent; conflicting reuse of a decision ID fails.
 
+## Data flow — Consequence Firewall approval execution
+
+`approval_center.ApprovalCenter` adds exact human consent without letting
+consent replace machine-verifiable Truth:
+
+1. A caller proposes one action bound to a persisted receipt, action ID,
+   policy, action kind, requester, risk, expiry, and payload SHA-256.
+2. The repository stores that payload hash and a canonical proposal hash with
+   identifiers, policy metadata, and timestamps. It never stores the raw
+   action payload.
+3. A person writes one immutable `approved` or `rejected` decision bound to the
+   proposal hash. Approval does not authorize execution by itself.
+4. An execution attempt supplies the proposal ID and payload hash. A changed
+   hash, missing/rejected/expired consent, or existing claim blocks before the
+   callback.
+5. For an approved exact attempt, the center asks the Action Gate for a fresh
+   decision and reads the exact persisted decision back. Failed,
+   contradictory, stale, or policy-ineligible Truth still blocks.
+6. In one immediate SQLite transaction, storage rechecks the approval
+   preconditions and current Truth state while inserting a unique execution
+   claim. Only the process that created that claim may invoke the bounded
+   callback.
+7. Completion or failure is audited without copying the payload into the
+   Approval Center. A replay sees the existing claim and never invokes the
+   callback again.
+
+This is an at-most-once local coordinator. If a process dies after the external
+effect but before recording completion, the claim remains indeterminate and is
+not retried automatically. External exactly-once effects therefore still
+require provider idempotency keys, acknowledgement read-back, and
+reconciliation.
+
+The generic CLI and `/api/v1/approvals` HTTP routes create, inspect, approve,
+and reject fixed-envelope proposals. They do not accept callback code, callback
+URLs, or arbitrary execution requests. Only the built-in judge endpoints own a
+bounded generated local callback. The HTTP service refuses non-loopback binds;
+`requested_by` and `decided_by` are local audit labels, not cryptographic
+identities, so operating-system/process access to localhost is the trust
+boundary.
+
+## Data flow — credential-free Approval Center proof
+
+`approval_challenge` exercises that boundary without credentials or external
+services:
+
+1. Stage creates one generated target in a separate local SQLite destination,
+   independently reads it back, persists healthy Truth evidence, and creates a
+   short-lived high-risk proposal. The outbox remains empty.
+2. Rejecting the proposal ends the proof with zero actions.
+3. Approving it first attempts a changed payload hash; the center returns
+   `approval_scope_mismatch` and does not invoke the callback.
+4. The exact payload then passes fresh Truth and creates the unique claim. One
+   bounded local outbox insert succeeds.
+5. Replaying the exact request returns `approval_already_consumed` and does not
+   invoke the callback.
+6. Independent destination read-back confirms exactly one outbox row and zero
+   external calls.
+
 ## Data flow — credential-free verified business outcome
 
 `outcome_challenge` demonstrates the whole evidence-to-action chain without
@@ -247,7 +318,7 @@ allowed status/setup/risk/approval/read-back values, duplicate IDs, declared
 counts, source paths, and accidental secret-like content before data reaches
 the UI/API.
 
-The v0.13 registry has 71 entries: 4 built-in agents, 20 LLM-facing tools,
+The v0.14 registry has 71 entries: 4 built-in agents, 20 LLM-facing tools,
 33 implemented/setup-required provider adapters (9 lead-source, 8
 verification, 6 sender, and 10 CRM), plus connector, channel, and model-route
 entries. Registry status is not connection status:
@@ -258,7 +329,10 @@ entries. Registry status is not connection status:
 - `planned` is roadmap-only.
 
 Registry loading does not import provider modules, read environment variables
-or credentials, or contact external services.
+or credentials, or contact external services. The four built-in agent-to-tool
+relations mirror their enforced runtime grants and are covered by a drift test;
+the remaining inventory is not thereby claimed as governed, connected, or
+live.
 
 ## Data flow — one voice turn (ElevenLabs custom-LLM)
 

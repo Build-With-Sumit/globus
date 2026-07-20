@@ -12,10 +12,15 @@ request path is. No network: the only socket is a loopback listener.
 
 Run with:  python tests/test_org_gate_http.py
 """
+import base64
+import hashlib
+import hmac
 import http.client
+import json
 import os
 import sys
 import threading
+import time
 import types
 from http.server import ThreadingHTTPServer
 
@@ -86,6 +91,7 @@ _dbh.configure = lambda **kw: None
 sys.modules["db_helpers"] = _dbh
 
 import globus_server as G       # noqa: E402  — the real thing
+import auth_cookies as auth_cookie_module  # noqa: E402
 from globus_auth import _code_hash  # noqa: E402
 from auth_cookies import make_cookie  # noqa: E402
 
@@ -108,13 +114,22 @@ threading.Thread(target=srv.serve_forever, daemon=True).start()
 print(f"server up on 127.0.0.1:{PORT}\n")
 
 
-def req(method, path, host="localhost", cookie=None, body=None):
+def req(
+    method,
+    path,
+    host="localhost",
+    cookie=None,
+    body=None,
+    content_type=None,
+):
     c = http.client.HTTPConnection("127.0.0.1", PORT, timeout=10)
     headers = {"Host": host}
     if cookie:
         headers["Cookie"] = cookie
     if body is not None:
-        headers["Content-Type"] = "application/x-www-form-urlencoded"
+        headers["Content-Type"] = (
+            content_type or "application/x-www-form-urlencoded"
+        )
     c.request(method, path, body=body, headers=headers)
     r = c.getresponse()
     data = r.read().decode("utf-8", "replace")
@@ -125,6 +140,22 @@ def req(method, path, host="localhost", cookie=None, body=None):
 
 
 ORG_HOST, DEAD_HOST, PLAIN = "globus.acme.com", "globus.gone.com", "localhost"
+
+
+def legacy_cookie(email):
+    payload = email + "|" + str(int(time.time()) + 60)
+    mac = hmac.new(
+        auth_cookie_module._SESSION_SECRET,
+        payload.encode(),
+        hashlib.sha256,
+    ).hexdigest()
+    token = (
+        base64.urlsafe_b64encode(payload.encode()).decode().rstrip("=")
+        + "."
+        + mac
+    )
+    return "bws_member=" + token
+
 
 print("the server boots and answers at all:")
 st, body, _, _ = req("GET", "/api/health", host=PLAIN)
@@ -159,16 +190,49 @@ for leak in ("/members/narada", "/members/globus/setup",
              "/members/vault-progress", "/members/telegram/bot",
              "/members/whatsapp", "/members/globus/upload"):
     st, body, _, _ = req("GET", leak, host=ORG_HOST,
-                         cookie=make_cookie("bob@acme.com"))
+                         cookie=make_cookie(
+                             "bob@acme.com", audience=ORG_HOST))
     check(f"{leak} 404s on an org host", st == 404, f"got {st}")
 
 print("\norg host — authenticated:")
-ck = make_cookie("bob@acme.com")
+ck = make_cookie("bob@acme.com", audience=ORG_HOST)
 st, body, _, _ = req("GET", "/", host=ORG_HOST, cookie=ck)
 check("an active member gets the org home", st == 200 and "Welcome" in body,
       f"{st}")
 check("...and it is NOT the single-tenant members landing",
       "Reels" not in body and "Narada" not in body)
+
+st, body, _, _ = req(
+    "GET",
+    "/",
+    host=ORG_HOST,
+    cookie=legacy_cookie("bob@acme.com"),
+)
+check(
+    "a valid-HMAC legacy unbound session fails closed",
+    st == 200 and "Sign in to" in body,
+    f"{st}",
+)
+
+cross_host_calls = []
+real_agent_run_async = G.agent_run_async
+G.agent_run_async = lambda name, email: cross_host_calls.append((name, email))
+try:
+    st, _, _, loc = req(
+        "POST",
+        "/members/globus/agents/run",
+        host=PLAIN,
+        cookie=ck,
+        body="agent=infra-watch",
+    )
+finally:
+    G.agent_run_async = real_agent_run_async
+check(
+    "an org session replayed to the plain host cannot run an agent",
+    st == 401 and not cross_host_calls,
+    f"{st} {loc} {cross_host_calls!r}",
+)
+
 st, body, _, _ = req("GET", "/members/globus/chat", host=ORG_HOST, cookie=ck)
 check("chat page renders", st == 200)
 st, body, _, _ = req("GET", "/members/connect", host=ORG_HOST, cookie=ck)
@@ -176,16 +240,21 @@ check("connect page renders", st == 200)
 st, body, _, _ = req("GET", "/members/globus/admin", host=ORG_HOST, cookie=ck)
 check("a NON-admin gets 404 on the admin console", st == 404, f"{st}")
 st, body, _, _ = req("GET", "/members/globus/admin", host=ORG_HOST,
-                     cookie=make_cookie("boss@acme.com"))
+                     cookie=make_cookie(
+                         "boss@acme.com", audience=ORG_HOST))
 check("an admin gets the console", st == 200 and "Sharing" in body, f"{st}")
 
 print("\norg host — a session from another surface:")
 st, body, setck, _ = req("GET", "/", host=ORG_HOST,
-                         cookie=make_cookie("outsider@example.com"))
+                         cookie=make_cookie(
+                             "outsider@example.com", audience=ORG_HOST))
 check("a non-member's valid cookie does NOT authenticate them here",
       st == 200 and "Sign in to" in body, f"{st}")
-check("...and the stale cookie is cleared", "bws_member=" in setck or setck != "",
-      f"set-cookie={setck!r}")
+check(
+    "...and the stale cookie is cleared",
+    setck.startswith("bws_member=;") and "Max-Age=0" in setck,
+    f"set-cookie={setck!r}",
+)
 
 print("\norg host — DENY (suspended / unresolvable):")
 st, body, _, _ = req("GET", "/", host=DEAD_HOST)
@@ -194,6 +263,14 @@ check("...and never falls through to the single-tenant site",
       "unavailable" in body.lower() and "Sign in to" not in body)
 st, body, _, _ = req("GET", "/members/narada", host=DEAD_HOST)
 check("every path on a denied host is a dead end", st == 503, f"{st}")
+
+for malformed_host in ("[::1]evil", "[::1]:notaport", "[::1]:8090:extra"):
+    st, body, _, _ = req("GET", "/", host=malformed_host)
+    check(
+        f"malformed Host {malformed_host!r} fails closed",
+        st == 503 and "unavailable" in body.lower(),
+        f"{st}",
+    )
 
 print("\norg host — sign-in (POST):")
 WRITES.clear()
@@ -214,7 +291,32 @@ st, body, setck, loc = req("POST", "/members/verify", host=ORG_HOST,
                            body="email=bob%40acme.com&code=123456")
 check("a good code redirects into the portal",
       st in (302, 303) and "/members/globus" in loc, f"{st} {loc}")
-check("...and sets a session cookie", "bws_member=" in setck or setck != "")
+check(
+    "...and sets a hardened session cookie",
+    setck.startswith("bws_member=")
+    and "; HttpOnly" in setck
+    and "; Secure" in setck
+    and "; SameSite=Lax" in setck,
+)
+same_status, same_body, _, _ = req(
+    "GET",
+    "/",
+    host=ORG_HOST,
+    cookie=setck,
+)
+cross_status, _, _, cross_location = req(
+    "GET",
+    "/members/globus",
+    host=PLAIN,
+    cookie=setck,
+)
+check(
+    "...and that minted cookie works only on its issuing host",
+    same_status == 200
+    and "Welcome" in same_body
+    and cross_status in (302, 303)
+    and "/members/login" in cross_location,
+)
 
 st, body, _, _ = req("POST", "/members/verify", host=ORG_HOST,
                      body="email=bob%40acme.com&code=999999")
@@ -231,7 +333,8 @@ st, _, _, _ = req("POST", "/members/globus/admin/grant", host=ORG_HOST,
                   cookie=ck, body="agent=research&audience=all%3A")
 check("a non-admin cannot grant (404)", st == 404, f"{st}")
 st, _, _, loc = req("POST", "/members/globus/admin/grant", host=ORG_HOST,
-                    cookie=make_cookie("boss@acme.com"),
+                    cookie=make_cookie(
+                        "boss@acme.com", audience=ORG_HOST),
                     body="agent=research&audience=all%3A")
 check("an admin can grant", st in (302, 303), f"{st}")
 st, _, _, _ = req("POST", "/members/narada/credentials/save", host=ORG_HOST,
@@ -276,6 +379,36 @@ st, _, _, loc = req("POST", "/members/globus/agents/run", host=ORG_HOST,
 check("an employee CAN run an agent granted to them",
       st in (302, 303), f"{st}")
 
+print("  - org grants also reach the chat run_agent dispatcher:")
+CHAT_CALLS = []
+_real_chat_send = G.globus_chat_send
+
+
+def _capture_chat(email, message, **kwargs):
+    CHAT_CALLS.append((email, message, kwargs))
+    return "ok", {}
+
+
+G.globus_chat_send = _capture_chat
+try:
+    st, _, _, _ = req(
+        "POST",
+        "/members/globus/chat",
+        host=ORG_HOST,
+        cookie=ck,
+        body=json.dumps({"message": "run my shared agent"}),
+        content_type="application/json",
+    )
+finally:
+    G.globus_chat_send = _real_chat_send
+check(
+    "org chat passes the employee's exact agent grants into dispatch",
+    st == 200
+    and len(CHAT_CALLS) == 1
+    and CHAT_CALLS[0][2].get("allowed_agent_names") == {AGENT_SLUG},
+    f"{st} {CHAT_CALLS!r}",
+)
+
 ungranted = None
 for a in G.GLOBUS_AGENTS_CATALOG[1:]:
     if a.get("name") and a["name"] != AGENT_SLUG:
@@ -294,21 +427,26 @@ if ungranted:
 # admins see the whole catalog without granting it to themselves
 GRANTS.clear()
 st, body, _, _ = req("GET", "/members/globus/agents", host=ORG_HOST,
-                     cookie=make_cookie("boss@acme.com"))
+                     cookie=make_cookie(
+                         "boss@acme.com", audience=ORG_HOST))
 check("an admin sees the catalog without a self-grant",
       st == 200 and AGENT_SLUG in body, f"{st}")
 st, _, _, _ = req("POST", "/members/globus/agents/run", host=ORG_HOST,
-                  cookie=make_cookie("boss@acme.com"), body=f"agent={AGENT_SLUG}")
+                  cookie=make_cookie(
+                      "boss@acme.com", audience=ORG_HOST),
+                  body=f"agent={AGENT_SLUG}")
 check("an admin can run it", st in (302, 303), f"{st}")
 
 # a non-member still gets nothing, even with grants present
 GRANTS.append({"agent_slug": AGENT_SLUG})
 st, body, _, _ = req("GET", "/members/globus/agents", host=ORG_HOST,
-                     cookie=make_cookie("outsider@example.com"))
+                     cookie=make_cookie(
+                         "outsider@example.com", audience=ORG_HOST))
 check("a non-member cannot reach the agents page at all",
       st == 200 and "Sign in to" in body, f"{st}")
 st, _, _, _ = req("POST", "/members/globus/agents/run", host=ORG_HOST,
-                  cookie=make_cookie("outsider@example.com"),
+                  cookie=make_cookie(
+                      "outsider@example.com", audience=ORG_HOST),
                   body=f"agent={AGENT_SLUG}")
 check("a non-member cannot run anything",
       st in (302, 303, 401, 404), f"{st}")

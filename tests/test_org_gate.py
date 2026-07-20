@@ -40,6 +40,7 @@ class Stub(G.Handler):
         self._cookie_email = cookie_email
         self._form_data = form or {}
         self.sent = None
+        self.headers = {"Host": "globus.acme.test"}
 
     # stubbed I/O
     def _send_html(self, code, body, extra_headers=None):
@@ -85,7 +86,7 @@ G.auto_enroll = lambda e, o, d: _state["enrolled"].append(e) or True
 G.list_org_members = lambda o: []
 G.list_grants = lambda o: []
 G.list_oauth_connections_with_stats = lambda e: []
-G.make_cookie = lambda e: "bws_member=stub"
+G.make_cookie = lambda e, *, audience: "bws_member=stub"
 
 
 # ── GET: the deny-by-default plane ───────────────────────────────────────
@@ -222,9 +223,16 @@ class HostStub(Stub):
 for raw, want in (("globus.acme.com", "globus.acme.com"),
                   ("globus.acme.com:8090", "globus.acme.com"),
                   ("EXAMPLE.COM", "example.com"),
+                  ("EXAMPLE.COM.:443", "example.com"),
                   ("[::1]:8090", "[::1]"),
                   ("", "")):
     check(f"_req_host({raw!r}) -> {want!r}", HostStub(raw)._req_host() == want)
+
+for malformed in ("[::1]evil", "[::1]:notaport", "[::1]:8090:extra", "["):
+    check(
+        f"malformed Host {malformed!r} fails closed",
+        HostStub(malformed)._org_for_req() is G.ORG_DENY,
+    )
 
 _orig = G.org_for_host
 
@@ -239,6 +247,10 @@ check("org lookup failure on a plain host stays single-tenant (None)",
 G.cfg = lambda k, d="": ("globus.acme.com:acme" if k == "ORG_PORTAL_HOSTS" else d)
 check("org lookup failure on a NAMED org host denies (fail closed)",
       HostStub("globus.acme.com")._org_for_req() is G.ORG_DENY)
+
+G.cfg = lambda k, d="": ("[::1]:local" if k == "ORG_PORTAL_HOSTS" else d)
+check("IPv6 config fallback is parsed without crossing surfaces",
+      HostStub("[::1]:8090")._org_for_req() is G.ORG_DENY)
 
 G.org_for_host = lambda h: None
 check("a plain host resolves to None -> gate no-ops",

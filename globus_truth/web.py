@@ -5,15 +5,18 @@ from __future__ import annotations
 import json
 import re
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from ipaddress import ip_address
 from typing import Any, Mapping
 from urllib.parse import parse_qs, unquote, urlsplit
 
+from .approval_center import ApprovalCenterError, ApprovalNotFoundError
 from .service import TruthService
 from .storage import ReceiptConflict
 
 MAX_REQUEST_BYTES = 64 * 1024
 _SAFE_STORAGE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$")
 _SAFE_DECISION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+_SAFE_PROPOSAL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _REJECTED_JSON = object()
 FAVICON_SVG = b"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
 <rect width="64" height="64" rx="16" fill="#0f1726"/>
@@ -56,6 +59,21 @@ DASHBOARD_HTML = r"""<!doctype html>
     .mission h2{font-size:clamp(25px,4vw,36px);letter-spacing:-.025em;margin:5px 0 9px}
     .mission p{color:var(--muted);margin:0;max-width:680px}
     .mission .actions{margin:18px 0 0}.mission-status{min-height:22px;color:var(--cyan);margin-top:8px}
+    .firewall{padding:26px;background:linear-gradient(135deg,#162b31ee,#201a3bee);margin:24px 0}
+    .firewall-top{display:grid;grid-template-columns:1.15fr .85fr;gap:28px;align-items:start}
+    .firewall h2{font-size:clamp(25px,4vw,36px);letter-spacing:-.025em;margin:5px 0 9px}
+    .firewall p{color:var(--muted);margin:0;max-width:700px}
+    .firewall .actions{margin:18px 0 0}.firewall-status{min-height:22px;color:var(--cyan);margin-top:8px}
+    .firewall-metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:9px}
+    .firewall-metric{padding:13px;background:#07121ee6;border:1px solid #385063;border-radius:12px}
+    .firewall-metric strong{display:block;color:var(--cyan);font-size:25px;line-height:1.1}
+    .firewall-metric span{display:block;color:var(--muted);font-size:11px;margin-top:5px}
+    .control-flow{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-top:22px}
+    .control-step{position:relative;padding:12px;background:#08111de6;border:1px solid #33445e;border-radius:12px}
+    .control-step small{display:block;color:var(--cyan);font-weight:800;text-transform:uppercase;
+      letter-spacing:.06em}.control-step span{display:block;margin-top:3px;font-weight:750;font-size:13px}
+    .control-step:not(:last-child)::after{content:"→";position:absolute;right:-8px;top:50%;z-index:2;
+      color:var(--cyan);font-weight:900;transform:translate(50%,-50%)}
     .capabilities{display:grid;grid-template-columns:repeat(3,1fr);gap:9px}
     .capability{padding:13px;background:#07121ee6;border:1px solid #2b4655;border-radius:12px}
     .capability strong{display:block;color:var(--cyan);font-size:25px;line-height:1.1}
@@ -118,17 +136,32 @@ DASHBOARD_HTML = r"""<!doctype html>
     .outcome-fact{display:flex;justify-content:space-between;gap:14px;border-top:1px solid #202b3e;padding-top:7px}
     .outcome-fact span:first-child{color:var(--muted)}.outcome-fact strong{text-align:right}
     .outcome-phase .actions{margin:15px 0 0}.outcome-phase .actions button{font-size:12px;padding:8px 10px}
+    .approval-callout{padding:15px;background:#241b0de6;border:1px solid #76562d;border-radius:12px;
+      color:var(--warn);margin:14px 0}
+    .approval-callout strong{display:block;color:var(--ink);font-size:16px;margin-bottom:3px}
+    .approval-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-top:16px}
+    .approval-result-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin:18px 0}
+    .approval-case{padding:16px;background:#0b1220;border:1px solid #26364f;border-radius:13px}
+    .approval-case h3{font-size:17px;margin:8px 0 5px}.approval-case p{color:var(--muted);margin:0}
+    .approval-attempts{display:grid;grid-template-columns:repeat(3,1fr);gap:9px;margin-top:12px}
+    .approval-attempt{padding:13px;background:#0b1220;border:1px solid #26364f;border-radius:12px}
+    .approval-attempt small{display:block;color:var(--muted);text-transform:uppercase;letter-spacing:.08em}
+    .approval-attempt strong{display:block;margin:5px 0}.approval-attempt .sub{overflow-wrap:anywhere}
+    .approved{color:var(--good)}.pending{color:var(--warn)}.blocked{color:var(--bad)}
     textarea{width:100%;min-height:220px;resize:vertical;background:#080e19;color:#dbe5ff;
       border:1px solid var(--line);border-radius:10px;padding:13px;font-family:ui-monospace,monospace;font-size:12px}
     .status{min-height:22px;color:var(--muted);margin-top:8px}.status.bad{color:var(--bad)}
     footer{color:var(--muted);font-size:12px;margin-top:20px;text-align:center}
-    @media(max-width:760px){header{display:block}.pulse{margin-top:18px}.mission-top,.lab{grid-template-columns:1fr}
+    @media(max-width:760px){header{display:block}.pulse{margin-top:18px}.mission-top,.firewall-top,.lab{grid-template-columns:1fr}
       .agent-flow{grid-template-columns:1fr}.agent-step:not(:last-child)::after{content:"↓";right:50%;top:auto;bottom:-9px}
+      .control-flow{grid-template-columns:1fr}.control-step:not(:last-child)::after{content:"↓";right:50%;top:auto;bottom:-9px}
       .challenge-flow{grid-template-columns:1fr 1fr}.summary{grid-template-columns:1fr 1fr}
-      .outcome-flow{grid-template-columns:1fr}.metric.hero{grid-column:1/-1}
+      .outcome-flow,.approval-result-grid{grid-template-columns:1fr}.approval-attempts{grid-template-columns:1fr}
+      .metric.hero{grid-column:1/-1}
       .toolbar{align-items:flex-start;flex-direction:column}.detail-grid{grid-template-columns:1fr}}
     @media(max-width:420px){.shell{width:min(100% - 20px,1180px);padding-top:22px}
-      .mission,.lab{padding:18px}.capabilities{grid-template-columns:1fr}.summary{grid-template-columns:1fr}
+      .mission,.firewall,.lab{padding:18px}.capabilities,.firewall-metrics,.approval-grid{grid-template-columns:1fr}
+      .summary{grid-template-columns:1fr}
       .metric.hero{grid-column:auto}.challenge-flow{grid-template-columns:1fr}.modal-body{padding:16px}}
   </style>
 </head>
@@ -140,6 +173,35 @@ DASHBOARD_HTML = r"""<!doctype html>
       independently verify their outcomes before consequential actions can proceed.</p></div>
     <div class="pulse"><i></i><span>localhost · private by default</span></div>
   </header>
+  <section class="firewall panel" aria-labelledby="firewallTitle">
+    <div class="firewall-top">
+      <div><div class="eyebrow">Consequence Firewall · Human Approval Center</div>
+        <h2 id="firewallTitle">Agents can ask. Humans decide what leaves.</h2>
+        <p>In this governed judge path, a generated high-risk request pauses before
+        execution so a person can approve or reject its exact scope. Approval alone is
+        not enough: current Truth evidence must still permit the bounded local action.</p>
+        <div class="actions"><button class="primary" id="stageApproval">Stage generated approval request</button></div>
+        <div class="firewall-status" id="approvalStatus" role="status"></div>
+      </div>
+      <div>
+        <div class="firewall-metrics" aria-label="Approval control summary">
+          <div class="firewall-metric"><strong id="firewallAgents">4</strong><span>registered built-in agents</span></div>
+          <div class="firewall-metric"><strong id="firewallTools">20</strong><span>registered LLM-facing tools</span></div>
+          <div class="firewall-metric"><strong id="firewallExplicit">2</strong><span>high-risk tools marked explicit approval</span></div>
+        </div>
+        <div class="disclosure">This judge path uses generated local data and a bounded local
+          action. It sends no email or message, calls no provider, and does not claim every
+          platform capability is governed by this path.</div>
+      </div>
+    </div>
+    <div class="control-flow" aria-label="Consequence Firewall control path">
+      <div class="control-step"><small>01 · Runtime boundary</small><span>Agent tools scoped</span></div>
+      <div class="control-step"><small>02 · Human review</small><span>Exact scope approved</span></div>
+      <div class="control-step"><small>03 · Truth Gate</small><span>Current evidence checked</span></div>
+      <div class="control-step"><small>04 · Execute once</small><span>Bound local action</span></div>
+      <div class="control-step"><small>05 · Prevent</small><span>Bad evidence or replay blocked</span></div>
+    </div>
+  </section>
   <section class="mission panel" aria-labelledby="missionTitle">
     <div class="mission-top">
       <div><div class="eyebrow">Business Outcome Gate</div><h2 id="missionTitle">From agent claim to verified action</h2>
@@ -210,6 +272,11 @@ DASHBOARD_HTML = r"""<!doctype html>
   <div class="modal-body"><div id="outcomeBody"></div><div class="actions">
     <button id="downloadOutcome">Download outcome JSON</button>
   </div></div></dialog>
+<dialog id="approval"><div class="modal-head"><div><div class="eyebrow">Human Approval Center</div>
+  <h2 id="approvalTitle">Review one exact action</h2></div><button class="close" data-close="approval">Close</button></div>
+  <div class="modal-body"><div id="approvalBody"></div><div class="actions">
+    <button id="downloadApproval" hidden>Download approval proof JSON</button>
+  </div></div></dialog>
 <dialog id="gate"><div class="modal-head"><div><div class="eyebrow">Immutable authorization audit</div>
   <h2 id="gateTitle">Action Gate decision</h2></div><button class="close" data-close="gate">Close</button></div>
   <div class="modal-body" id="gateBody"></div></dialog>
@@ -230,7 +297,8 @@ DASHBOARD_HTML = r"""<!doctype html>
   </div></div></dialog>
 <script>
 "use strict";
-const $=id=>document.getElementById(id), state={runs:[],challenge:null,outcome:null,platform:null};
+const $=id=>document.getElementById(id), state={runs:[],challenge:null,outcome:null,
+  approval:null,approvals:[],platform:null};
 const labels={healthy:"healthy",verified_no_work:"verified no-work",
   degraded_contradictory:"contradictory",failed:"failed",stale:"stale"};
 function el(tag,text,cls){const n=document.createElement(tag);if(text!==undefined)n.textContent=String(text);
@@ -329,6 +397,163 @@ function downloadOutcome(){if(!state.outcome)return;const body=JSON.stringify(st
   const url=URL.createObjectURL(new Blob([body],{type:"application/json"}));const link=el("a");
   link.href=url;link.download=`${state.outcome.challenge_id||"globus-outcome-gate"}.json`;
   document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),0)}
+function firstValue(...values){for(const value of values){if(value!==undefined&&value!==null&&value!=="")return value}
+  return undefined}
+function approvalProposal(report){const candidate=report?.proposal||report?.request||report||{};
+  return candidate&&typeof candidate==="object"?candidate:{}}
+function approvalTruth(source){const truth=source?.truth||source?.receipt||{};
+  return truth&&typeof truth==="object"?truth:{}}
+function approvalReasons(source){const reasons=firstValue(source?.reason_codes,source?.reasons,source?.gate?.reason_codes);
+  return Array.isArray(reasons)&&reasons.length?reasons.join(", "):"—"}
+function approvalIdentifier(report){const p=approvalProposal(report);
+  return firstValue(report?.proposal_id,p.proposal_id,report?.request_id,p.request_id)}
+function approvalDetail(grid,label,value,hash=false){const d=el("div",undefined,"detail");
+  d.append(el("small",label),el("div",value??"—",hash?"hash":undefined));grid.append(d)}
+function renderApprovalPending(report){state.approval=report;$("approvalTitle").textContent="Review one exact action";
+  $("downloadApproval").hidden=true;const root=$("approvalBody");root.replaceChildren();
+  const p=approvalProposal(report),truth=approvalTruth(p),action=report.action||{};
+  root.append(el("span","awaiting human review","badge pending"));
+  const callout=el("div",undefined,"approval-callout");
+  callout.append(el("strong","Paused safely — no action has executed."),
+    el("span","This request uses generated local data. Approval is limited to the exact scope shown below."));
+  root.append(callout);
+  root.append(el("div",firstValue(p.summary,report.summary,
+    "A governed demo actor is requesting one bounded local follow-up action."),"status"));
+  const grid=el("div",undefined,"approval-grid");
+  approvalDetail(grid,"Requested by",firstValue(p.agent_id,p.actor_id,p.requested_by,"generated-demo-agent"));
+  approvalDetail(grid,"Capability",firstValue(p.capability_id,p.tool_id,p.tool,"bounded local action"));
+  approvalDetail(grid,"Action",firstValue(p.action_id,p.action_kind,action.action_id,action.kind,"generated follow-up"));
+  approvalDetail(grid,"Risk / approval",`${firstValue(p.risk,"high")} · ${firstValue(p.approval_mode,p.approval,"explicit")}`);
+  approvalDetail(grid,"Scope",firstValue(p.scope_summary,p.scope,report.scope_summary,"1 generated local record"));
+  approvalDetail(grid,"Truth evidence",`${firstValue(p.truth_verdict,truth.verdict,report.truth_verdict,"pending read-back")} · ${
+    firstValue(p.truth_storage_id,p.storage_id,truth.storage_id,report.truth_storage_id,"receipt bound at execution")}`);
+  approvalDetail(grid,"Approval lifetime",firstValue(p.expires_at,report.expires_at,"short-lived"));
+  approvalDetail(grid,"Maximum uses",firstValue(p.max_uses,report.max_uses,1));
+  root.append(grid,el("div","Exact payload fingerprint","section"),
+    el("div",firstValue(p.payload_sha256,p.scope_sha256,report.payload_sha256,"not reported"),"detail hash"),
+    el("div","Changing the actor, capability, action, payload, or bound evidence requires a new approval.","status"));
+  const actions=el("div",undefined,"actions"),approve=el("button","Approve this exact action","primary"),
+    reject=el("button","Reject and keep blocked");
+  approve.addEventListener("click",()=>resolveApproval(report,"approved",approve,reject));
+  reject.addEventListener("click",()=>resolveApproval(report,"rejected",approve,reject));
+  actions.append(approve,reject);root.append(actions)}
+function approvalPhases(report){let phases=firstValue(report?.phases,report?.truth_cases,report?.cases);
+  if(Array.isArray(phases))return phases;
+  if(phases&&typeof phases==="object")return Object.entries(phases).map(([name,value])=>({
+    name,...(value&&typeof value==="object"?value:{})}));
+  const fallback=[];if(report?.healthy_phase)fallback.push({name:"healthy",...report.healthy_phase});
+  if(report?.contradictory_phase)fallback.push({name:"contradictory",...report.contradictory_phase});
+  return fallback}
+function approvalAttempts(report){const attempts=firstValue(report?.attempts,report?.execution_attempts,
+    report?.replay_proof);
+  if(Array.isArray(attempts))return attempts;
+  if(attempts&&typeof attempts==="object")return Object.entries(attempts).map(([name,value])=>({
+    name,...(value&&typeof value==="object"?value:{})}));
+  return []}
+function phaseCard(phase){const name=String(firstValue(phase.name,phase.phase,"case"));
+  const truth=approvalTruth(phase),verdict=firstValue(phase.truth_verdict,truth.verdict,phase.verdict,"not reported");
+  const approved=firstValue(phase.human_approved,phase.approved)===true;
+  const gateAllowed=firstValue(phase.gate_authorized,phase.authorized,phase.gate?.authorized)===true;
+  const executed=firstValue(phase.executed,phase.action_executed)===true;
+  const healthy=name.includes("healthy")||verdict==="healthy";
+  const card=el("section",undefined,"approval-case");
+  card.append(el("span",executed?"executed once":gateAllowed?"authorized":"blocked",
+    "badge "+(executed||gateAllowed?"healthy":"degraded_contradictory")));
+  card.append(el("h3",healthy?"Human approved + Truth healthy":"Human approved + Truth contradictory"));
+  card.append(el("p",healthy
+    ?(approved&&gateAllowed&&executed
+      ?"Approval and current evidence agreed, so one bounded local action executed."
+      :"The service did not prove the full approved, allowed, executed sequence.")
+    :(approved&&!gateAllowed&&!executed
+      ?"The person approved, but contradictory evidence still blocked execution."
+      :"The service did not prove the expected contradictory-evidence block.")));
+  const facts=el("div",undefined,"outcome-facts");
+  outcomeFact(facts,"Human approval",approved?"approved":"not proven");
+  outcomeFact(facts,"Truth verdict",verdict);
+  outcomeFact(facts,"Truth Gate",gateAllowed?"allowed":"blocked");
+  outcomeFact(facts,"Action",executed?"executed once":"not executed");
+  outcomeFact(facts,"Reason",approvalReasons(phase));card.append(facts);return card}
+function attemptCard(attempt){const name=String(firstValue(attempt.name,attempt.kind,attempt.label,"attempt"));
+  const executed=firstValue(attempt.executed,attempt.action_executed)===true;
+  const authorized=firstValue(attempt.authorized,attempt.allowed)===true;
+  const status=String(firstValue(attempt.status,"")).toLowerCase(),reason=approvalReasons(attempt);
+  const blocked=!executed&&(!authorized||["blocked","rejected","already_consumed"].includes(status)||
+    reason.includes("scope_mismatch")||reason.includes("already_consumed")||reason.includes("rejected"));
+  const title=name.includes("change")?"Changed payload":name.includes("replay")?"Replay":name.includes("exact")
+    ?"Exact approved payload":firstValue(attempt.label,name);
+  const card=el("div",undefined,"approval-attempt");
+  card.append(el("small",title),el("strong",executed?"executed once":blocked?"blocked":"not proven",
+    executed?"approved":blocked?"blocked":"pending"),
+    el("div",reason,"sub"));
+  const fingerprint=firstValue(attempt.payload_sha256,attempt.scope_sha256);
+  if(fingerprint)card.append(el("div",fingerprint,"sub hash"));return card}
+function renderApprovalResolved(report){state.approval=report;$("downloadApproval").hidden=false;
+  const root=$("approvalBody");root.replaceChildren();const disposition=firstValue(report.disposition,
+    report.resolution,report.status),rejected=disposition==="rejected"||disposition==="denied";
+  const phases=approvalPhases(report),attempts=approvalAttempts(report);
+  const hasHealthy=phases.some(phase=>String(firstValue(phase.name,phase.phase,"")).includes("healthy")||
+    firstValue(phase.truth_verdict,phase.verdict,phase.truth?.verdict)==="healthy");
+  const hasContradictory=phases.some(phase=>String(firstValue(phase.name,phase.phase,"")).includes("contradict")||
+    firstValue(phase.truth_verdict,phase.verdict,phase.truth?.verdict)==="degraded_contradictory");
+  $("approvalTitle").textContent=rejected?"Request rejected safely":"Consequence Firewall proof";
+  if(rejected){root.append(el("span","rejected by human","badge blocked"),
+      el("div","The operator rejected the generated request. No external action was attempted.","approval-callout"));
+  }else{root.append(el("span",report.expectations_met===true?"control proven":"inspect result",
+      "badge "+(report.expectations_met===true?"healthy":"pending")),
+      el("div",report.expectations_met===true
+        ?(hasHealthy&&hasContradictory
+          ?"Human approval was necessary, but not sufficient: healthy evidence executed once; contradictory evidence still blocked."
+          :"The exact approved payload executed once; a changed payload and replay stayed blocked.")
+        :"The challenge resolved, but the service did not report every expected approval and Truth transition.","status"))}
+  if(phases.length){const cases=el("div",undefined,"approval-result-grid");
+    for(const phase of phases)cases.append(phaseCard(phase));root.append(cases)}
+  if(attempts.length){root.append(el("div","Exact-scope and replay checks","section"));
+    const cards=el("div",undefined,"approval-attempts");
+    for(const attempt of attempts)cards.append(attemptCard(attempt));root.append(cards)}
+  const p=approvalProposal(report),audit=report.audit||{},approval=report.approval||audit.approval||{},
+    claim=report.claim||audit.claim||{},completion=report.completion||audit.completion||{},action=report.action||{};
+  root.append(el("div","Privacy-safe approval audit","section"));
+  const grid=el("div",undefined,"detail-grid");
+  approvalDetail(grid,"Proposal",approvalIdentifier(report));
+  approvalDetail(grid,"Actor",firstValue(p.agent_id,p.actor_id,approval.actor_id));
+  approvalDetail(grid,"Capability",firstValue(p.capability_id,p.tool_id,approval.capability_id));
+  approvalDetail(grid,"Action",firstValue(p.action_id,p.action_kind,action.action_id,approval.action_id));
+  approvalDetail(grid,"Payload SHA-256",firstValue(p.payload_sha256,p.scope_sha256,approval.payload_sha256),"hash");
+  approvalDetail(grid,"Truth receipt",firstValue(p.truth_storage_id,p.storage_id,approval.truth_storage_id,report.truth_storage_id));
+  approvalDetail(grid,"Approved",firstValue(approval.approved_at,approval.decided_at,report.approved_at,
+    rejected?"not approved":"not reported"));
+  approvalDetail(grid,"Consumed",firstValue(approval.consumed_at,claim.claimed_at,report.consumed_at,
+    rejected?"not consumed":"not reported"));
+  approvalDetail(grid,"Truth Gate decision",firstValue(claim.gate_decision_id,report.gate_decision_id,
+    rejected?"not invoked":"not reported"));
+  approvalDetail(grid,"Completion",firstValue(completion.outcome,completion.reason_code,
+    rejected?"not invoked":"not reported"));
+  approvalDetail(grid,"Execution count",firstValue(action.execution_count,action.executions,action.final_outbox_rows,0));
+  approvalDetail(grid,"External calls",firstValue(report.external_calls,0));root.append(grid,
+    el("div","Generated local proof only. No email, message, or provider call is represented as sent.","status"))}
+async function resolveApproval(report,disposition,...buttons){const proposalId=approvalIdentifier(report);
+  if(!proposalId){$("approvalStatus").textContent="Approval request is missing a safe proposal identifier.";return}
+  for(const button of buttons)button.disabled=true;
+  $("approvalStatus").textContent=disposition==="approved"
+    ?"Applying this exact approval, then testing Truth and replay controls…"
+    :"Rejecting the request and verifying that no action executes…";
+  try{const resolved=await api(`/api/v1/judge/approval-center/${encodeURIComponent(proposalId)}/${
+      disposition==="approved"?"approve":"reject"}`,
+      {method:"POST",headers:{"Content-Type":"application/json"},body:"{}"});
+    renderApprovalResolved(resolved);$("approvalStatus").textContent=disposition==="approved"
+      ?(resolved.expectations_met===true
+        ?(approvalPhases(resolved).some(phase=>String(firstValue(phase.name,phase.phase,"")).includes("contradict"))
+          ?"Verified: healthy evidence executed once; contradictory evidence and unsafe reuse were blocked."
+          :"Verified: the exact approved payload executed once; payload changes and replay were blocked.")
+        :"Resolved safely; inspect the reported controls.")
+      :"Rejected: the generated request stayed blocked.";
+    await Promise.all([refresh(),loadApprovals()])}
+  catch(e){$("approvalStatus").textContent=`Approval resolution failed safely: ${e.message}`;
+    for(const button of buttons)button.disabled=false}}
+function downloadApproval(){if(!state.approval)return;const body=JSON.stringify(state.approval,null,2);
+  const url=URL.createObjectURL(new Blob([body],{type:"application/json"}));const link=el("a");
+  link.href=url;link.download=`${approvalIdentifier(state.approval)||"globus-approval-proof"}.json`;
+  document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),0)}
 function challengePhase(name){return (state.challenge?.phases||[]).find(p=>p.name===name)||{}}
 function shortHash(value){const text=String(value||"");return text?`${text.slice(0,16)}…`:"—"}
 function renderChallenge(report){state.challenge=report;const root=$("challengeBody");root.replaceChildren();
@@ -373,8 +598,20 @@ async function loadPlatform(){try{const platform=await api("/api/v1/platform/cap
   $("platformAgents").textContent=headline.built_in_agents??"—";
   $("platformTools").textContent=headline.llm_tools??"—";
   $("platformAdapters").textContent=headline.implemented_provider_adapters??"—";
+  $("firewallAgents").textContent=headline.built_in_agents??"—";
+  $("firewallTools").textContent=headline.llm_tools??"—";
+  const capabilities=Array.isArray(platform.capabilities)?platform.capabilities:[];
+  $("firewallExplicit").textContent=capabilities.filter(item=>item?.kind==="tool"&&
+    item?.risk==="high"&&item?.approval==="explicit").length||"—";
   if(summary.disclosure)$("platformDisclosure").textContent=summary.disclosure}
   catch(e){$("platformDisclosure").textContent=`Capability inventory unavailable: ${e.message}`}}
+async function loadApprovals(){try{const result=await api("/api/v1/approvals?limit=100");
+  state.approvals=Array.isArray(result)?result:(result.proposals||result.approvals||[]);
+  const pending=state.approvals.filter(item=>["pending","awaiting_review","staged"].includes(
+    String(firstValue(item?.status,item?.state,"")).toLowerCase())).length;
+  if(pending>0&&!state.approval)$("approvalStatus").textContent=`${pending} generated approval request${
+    pending===1?" is":"s are"} awaiting review.`}
+  catch(e){$("approvalStatus").textContent=`Approval Center unavailable: ${e.message}`}}
 $("loadSamples").addEventListener("click",async()=>{const b=$("loadSamples");b.disabled=true;try{
   await api("/api/v1/samples/load",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"});await refresh()}
   catch(e){alert(e.message)}finally{b.disabled=false}});
@@ -394,7 +631,15 @@ $("runOutcome").addEventListener("click",async()=>{const b=$("runOutcome"),out=$
       :"Workflow finished, but the expected allow-to-block transition was not proven.";
     $("outcome").showModal()}catch(e){out.textContent=`Outcome Gate failed safely: ${e.message}`}
   finally{b.disabled=false}});
-$("refresh").addEventListener("click",()=>Promise.all([refresh(),loadPlatform()]));
+$("stageApproval").addEventListener("click",async()=>{const b=$("stageApproval"),out=$("approvalStatus");
+  b.disabled=true;out.textContent="Staging one generated local request without executing it…";
+  try{const report=await api("/api/v1/judge/approval-center/stage",
+      {method:"POST",headers:{"Content-Type":"application/json"},body:"{}"});
+    renderApprovalPending(report);out.textContent="Paused safely: review the exact request before anything can execute.";
+    $("approval").showModal();await loadApprovals()}
+  catch(e){out.textContent=`Approval request failed safely: ${e.message}`}
+  finally{b.disabled=false}});
+$("refresh").addEventListener("click",()=>Promise.all([refresh(),loadPlatform(),loadApprovals()]));
 $("showIngest").addEventListener("click",async()=>{if(!$("receiptJson").value){try{
   const data=await api("/api/v1/samples");$("receiptJson").value=JSON.stringify(data.receipts?.[0]||{},null,2)}catch(_){}}
   $("ingestStatus").textContent="";$("ingest").showModal()});
@@ -406,8 +651,9 @@ $("inspectClean").addEventListener("click",()=>inspectChallenge("before_tamper")
 $("inspectCaught").addEventListener("click",()=>inspectChallenge("after_tamper"));
 $("downloadChallenge").addEventListener("click",downloadChallenge);
 $("downloadOutcome").addEventListener("click",downloadOutcome);
+$("downloadApproval").addEventListener("click",downloadApproval);
 document.querySelectorAll("[data-close]").forEach(b=>b.addEventListener("click",()=>$(b.dataset.close).close()));
-Promise.all([refresh(),loadPlatform()]);
+Promise.all([refresh(),loadPlatform(),loadApprovals()]);
 </script>
 </body></html>"""
 
@@ -435,6 +681,16 @@ class TruthHTTPServer(ThreadingHTTPServer):
     allow_reuse_address = True
 
     def __init__(self, address: tuple[str, int], service: TruthService) -> None:
+        bind_host = str(address[0]).strip().lower()
+        try:
+            loopback = bind_host == "localhost" or ip_address(bind_host).is_loopback
+        except ValueError:
+            loopback = False
+        if not loopback:
+            raise ValueError(
+                "Globus Truth HTTP is local-only; bind to 127.0.0.1, ::1, "
+                "or localhost"
+            )
         self.service = service
         super().__init__(address, TruthRequestHandler)
 
@@ -477,9 +733,6 @@ class TruthRequestHandler(BaseHTTPRequestHandler):
         self._json(status, {"error": message})
 
     def _host_allowed(self) -> bool:
-        bound = str(self.server.server_address[0]).lower()
-        if bound not in {"127.0.0.1", "::1", "localhost"}:
-            return True
         host = (self.headers.get("Host") or "").lower()
         return (
             host == "localhost"
@@ -568,6 +821,50 @@ class TruthRequestHandler(BaseHTTPRequestHandler):
             else:
                 self._json(200, decision)
             return
+        if path == "/api/v1/approvals":
+            try:
+                limit = int(query.get("limit", ["100"])[0])
+                if not 1 <= limit <= 500:
+                    raise ValueError
+            except (ValueError, TypeError):
+                self._error(400, "limit must be 1-500")
+                return
+            try:
+                proposals = self.server.service.list_approval_proposals(
+                    limit=limit
+                )
+                if not isinstance(proposals, list):
+                    raise TypeError("approval proposal list unavailable")
+            except Exception as exc:
+                print(
+                    "[truth-http] approval list failed safely: "
+                    f"{type(exc).__name__}"
+                )
+                self._error(500, "approval proposals unavailable safely")
+                return
+            self._json(200, {"proposals": proposals, "limit": limit})
+            return
+        if path.startswith("/api/v1/approvals/"):
+            proposal_id = unquote(path.removeprefix("/api/v1/approvals/"))
+            if not _SAFE_PROPOSAL_ID.fullmatch(proposal_id):
+                self._error(400, "invalid approval proposal identifier")
+                return
+            try:
+                proposal = self.server.service.get_approval_proposal(
+                    proposal_id
+                )
+            except Exception as exc:
+                print(
+                    "[truth-http] approval lookup failed safely: "
+                    f"{type(exc).__name__}"
+                )
+                self._error(500, "approval proposal unavailable safely")
+                return
+            if proposal is None:
+                self._error(404, "approval proposal not found")
+            else:
+                self._json(200, proposal)
+            return
         if path == "/api/v1/samples":
             self._json(200, {"receipts": self.server.service.samples()})
             return
@@ -627,6 +924,75 @@ class TruthRequestHandler(BaseHTTPRequestHandler):
                 return
             self._json(201 if result["created"] else 200, result)
             return
+        if path == "/api/v1/approvals":
+            required = {
+                "proposal_id",
+                "storage_id",
+                "action_id",
+                "policy_id",
+                "action_kind",
+                "payload_sha256",
+                "requested_by",
+                "risk",
+                "expires_at",
+            }
+            if not isinstance(payload, Mapping) or set(payload) != required:
+                self._error(400, "approval proposal fields are invalid")
+                return
+            try:
+                result = self.server.service.submit_action_proposal(**payload)
+            except ValueError:
+                self._error(400, "approval proposal could not be validated")
+                return
+            except Exception as exc:
+                print(
+                    "[truth-http] approval proposal write failed safely: "
+                    f"{type(exc).__name__}"
+                )
+                self._error(500, "approval proposal unavailable safely")
+                return
+            self._json(201 if result["created"] else 200, result)
+            return
+        decision_match = re.fullmatch(
+            r"/api/v1/approvals/([^/]+)/decision",
+            path,
+        )
+        if decision_match is not None:
+            proposal_id = unquote(decision_match.group(1))
+            if not _SAFE_PROPOSAL_ID.fullmatch(proposal_id):
+                self._error(400, "invalid approval proposal identifier")
+                return
+            if (
+                not isinstance(payload, Mapping)
+                or set(payload) != {"outcome", "decided_by", "reason_code"}
+            ):
+                self._error(400, "human decision fields are invalid")
+                return
+            try:
+                result = self.server.service.decide_action_proposal(
+                    proposal_id,
+                    outcome=payload["outcome"],
+                    decided_by=payload["decided_by"],
+                    reason_code=payload["reason_code"],
+                )
+            except ApprovalNotFoundError:
+                self._error(404, "approval proposal not found")
+                return
+            except ApprovalCenterError:
+                self._error(409, "proposal cannot accept that decision")
+                return
+            except ValueError:
+                self._error(400, "human decision could not be validated")
+                return
+            except Exception as exc:
+                print(
+                    "[truth-http] human decision write failed safely: "
+                    f"{type(exc).__name__}"
+                )
+                self._error(500, "human decision unavailable safely")
+                return
+            self._json(201 if result["created"] else 200, result)
+            return
         if path == "/api/v1/samples/load":
             if payload != {}:
                 self._error(400, "sample loader accepts only an empty JSON object")
@@ -662,6 +1028,59 @@ class TruthRequestHandler(BaseHTTPRequestHandler):
                 self._error(500, "outcome gate failed safely")
                 return
             self._json(201, result)
+            return
+        if path == "/api/v1/judge/approval-center/stage":
+            if payload != {}:
+                self._error(
+                    400,
+                    "approval challenge stage accepts only an empty JSON object",
+                )
+                return
+            try:
+                result = self.server.service.stage_approval_challenge()
+                if not isinstance(result, Mapping):
+                    raise TypeError("approval challenge report unavailable")
+            except Exception as exc:
+                print(
+                    "[truth-http] approval challenge stage failed safely: "
+                    f"{type(exc).__name__}"
+                )
+                self._error(500, "approval challenge failed safely")
+                return
+            self._json(201, result)
+            return
+        approval_match = re.fullmatch(
+            r"/api/v1/judge/approval-center/([^/]+)/(approve|reject)",
+            path,
+        )
+        if approval_match is not None:
+            if payload != {}:
+                self._error(
+                    400,
+                    "approval challenge resolution accepts only an empty JSON object",
+                )
+                return
+            proposal_id = unquote(approval_match.group(1))
+            if not _SAFE_PROPOSAL_ID.fullmatch(proposal_id):
+                self._error(400, "invalid approval proposal identifier")
+                return
+            action = approval_match.group(2)
+            disposition = "approved" if action == "approve" else "rejected"
+            try:
+                result = self.server.service.resolve_approval_challenge(
+                    proposal_id,
+                    disposition=disposition,
+                )
+                if not isinstance(result, Mapping):
+                    raise TypeError("approval challenge report unavailable")
+            except Exception as exc:
+                print(
+                    "[truth-http] approval challenge resolution failed safely: "
+                    f"{type(exc).__name__}"
+                )
+                self._error(500, "approval challenge resolution failed safely")
+                return
+            self._json(200, result)
             return
         self._error(404, "not found")
 

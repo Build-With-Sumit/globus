@@ -542,7 +542,7 @@ instead of equating a successful model call with successful work.
 - 📄 See [`globus_truth/README.md`](globus_truth/README.md) and
   [`docs/TRUTH_LAYER_BUILD_STORY.md`](docs/TRUTH_LAYER_BUILD_STORY.md).
 
-## v0.13 (current) — Mission Control + verified Action Gate
+## v0.13 — Mission Control + verified Action Gate
 
 v0.13 turns the standalone Truth dashboard into the first Mission Control
 surface for a verified AgentOS. It deliberately prioritizes an inspectable,
@@ -581,19 +581,64 @@ fail-closed control path over a large but unverifiable integration count.
 - 📄 See [`globus_truth/README.md`](globus_truth/README.md) and
   [`docs/TRUTH_LAYER_BUILD_STORY.md`](docs/TRUTH_LAYER_BUILD_STORY.md).
 
+## v0.14 (current) — Consequence Firewall + Approval Center
+
+v0.14 puts enforceable limits between an agent's plan and a consequential
+effect. Its scope is intentionally concrete: four shipped background agents
+and a local, inspectable approval coordinator.
+
+- ✅ **Exact deny-by-default tool grants.** Research, Sales Desk, Narada, and
+  Infra Watch each declare a non-empty runtime allowlist. The model sees only
+  the granted tool schemas, and the orchestrator rechecks the tool name before
+  dispatcher invocation. Forged disallowed calls cannot reach the tool
+  implementation.
+- ✅ **Delegation grant check.** A background agent can invoke only the tools
+  assigned to it, and member chat can delegate only to agents granted by the
+  organization gate. Missing grants fail closed.
+- ✅ **Host-bound member sessions.** v2 session tokens sign the normalized
+  arrival host, so an organization-portal cookie cannot be replayed against the
+  single-tenant surface or another portal. Legacy unbound cookies require a
+  fresh sign-in.
+- ✅ **Registry/runtime drift guard.** The four agent-to-tool relations in the
+  source-backed platform graph are tested against the enforced catalog
+  allowlists. This does not imply that every one of the 71 inventory entries is
+  governed, configured, connected, or live.
+- ✅ **Payload-free Approval Center.** Exact proposals and immutable human
+  decisions store identifiers, policy metadata, timestamps, proposal/payload
+  hashes, and execution state—not raw action payloads.
+- ✅ **Consent remains subordinate to Truth.** Approval cannot override a
+  failed, contradictory, stale, or policy-ineligible receipt. Immediately
+  before execution, the center obtains and reads back a fresh Action Gate
+  decision, atomically rechecks Truth, and creates a unique execution claim.
+- ✅ **Local at-most-once claim.** Only the creator of the unique claim invokes
+  the bounded callback, so changed payloads and replays do not execute. This is
+  not an external exactly-once guarantee; provider actions still require
+  provider idempotency keys, acknowledgement read-back, and reconciliation.
+- ✅ **Credential-free changed/exact/replay proof.** The dashboard and CLI
+  stage a generated high-risk local action with zero executions before review.
+  Approval demonstrates a changed payload blocked, the exact payload executed
+  once after fresh Truth, and an exact replay blocked; independent read-back
+  ends with one local outbox row. Rejection executes nothing.
+- ✅ **Generic API and CLI.** Operators can create, inspect, approve, and reject
+  exact proposals. The generic HTTP API deliberately does not accept or
+  dispatch arbitrary callbacks; only the bounded built-in judge workflow
+  performs its generated local callback.
+- 📄 See [`globus_truth/README.md`](globus_truth/README.md) and
+  [`ARCHITECTURE.md`](ARCHITECTURE.md).
+
 ### 30/60/90-day path toward a verified AgentOS
 
 This is a direction, not a claim of OpenClaw parity.
 
-**Next 30 days — make the control plane operational**
+**Next 30 days — extend the control plane safely**
 
-- [ ] Derive tool dispatch and agent grants from one typed capability source so
-  catalog declarations and runtime enforcement cannot drift.
+- [ ] Extend typed, deny-by-default grants beyond the four built-in background
+  agents without presenting inventory-only capabilities as governed.
 - [ ] Add per-member installation state and health checks, while keeping
   “implemented” separate from “connected.”
-- [ ] Apply Action Gate receipts to one reversible, production-shaped workflow
-  with explicit approval, idempotency keys, destination read-back, and audit
-  export.
+- [ ] Apply the Consequence Firewall to one reversible real-provider workflow
+  with provider idempotency keys, destination acknowledgement/read-back,
+  reconciliation, and audit export.
 - [ ] Add proper versioned migrations for both MySQL and Truth SQLite state.
 
 **Next 60 days — add a narrow, safe extension SDK**
@@ -604,7 +649,8 @@ This is a direction, not a claim of OpenClaw parity.
 - [ ] Add durable workflow state: queued runs, retries, leases, cancellation,
   resumability, and operator-visible checkpoints.
 - [ ] Add policy scopes at organization, member, agent, tool, destination, and
-  data-source levels, plus a human-approval inbox for high-risk actions.
+  data-source levels, and extend the local Approval Center into an
+  authenticated multi-member inbox.
 - [ ] Ship a small set of well-tested first-party channel/connectors through the
   same contract rather than claiming every catalog entry is live.
 

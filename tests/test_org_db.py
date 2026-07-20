@@ -75,6 +75,25 @@ def check(name, cond):
 # ── org_for_host: the deny-by-default host gate ───────────────────────────
 print("org_for_host (host gate):")
 
+check(
+    "request hosts are normalized with strict DNS, port, and IPv6 syntax",
+    org_db.normalize_host_header("EXAMPLE.COM.:443") == "example.com"
+    and org_db.normalize_host_header("[0:0::1]:8090") == "[::1]"
+    and org_db.normalize_host_header("localhost") == "localhost",
+)
+for malformed in (
+    "[::1]evil",
+    "[::1]:notaport",
+    "[::1]:8090:extra",
+    "[",
+    "example.com:0",
+    "bad_host.example",
+):
+    check(
+        f"malformed Host {malformed!r} is rejected",
+        org_db.normalize_host_header(malformed) == "",
+    )
+
 wire({"FROM organizations": [{"id": 7, "slug": "acme", "name": "Acme",
                               "status": "active"}]})
 check("active org host resolves to the org",
@@ -101,6 +120,11 @@ wire({"WHERE portal_host": None,
 check("DB error + config fallback resolves the org",
       org_db.org_for_host("globus.acme.com") == {"id": 7, "slug": "acme",
                                                  "name": "Acme"})
+
+_CFG["ORG_PORTAL_HOSTS"] = "[::1]:local"
+wire({"WHERE portal_host": None, "WHERE slug": []})
+check("IPv6 config fallback DENIES rather than crossing surfaces",
+      org_db.org_for_host("[::1]") is org_db.DENY)
 
 wire({"WHERE portal_host": None})
 check("DB error on an UNKNOWN host stays single-tenant (None)",

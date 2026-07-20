@@ -47,7 +47,50 @@ _ACTION_BLOCK_REASONS = {
     "malformed": "truth_record_malformed",
     "unavailable": "truth_lookup_failed",
 }
+_APPROVAL_POLICIES = _ACTION_POLICIES
+_APPROVAL_RISKS = {"low", "medium", "high", "critical"}
+_APPROVAL_OUTCOMES = {"approved", "rejected"}
+_APPROVAL_COMPLETION_OUTCOMES = {"succeeded", "failed"}
+_APPROVAL_PROPOSAL_FIELDS = {
+    "proposal_id",
+    "storage_id",
+    "action_id",
+    "policy_id",
+    "action_kind",
+    "payload_sha256",
+    "requested_by",
+    "risk",
+    "created_at",
+    "expires_at",
+    "proposal_sha256",
+}
+_APPROVAL_DECISION_FIELDS = {
+    "approval_id",
+    "proposal_id",
+    "proposal_sha256",
+    "outcome",
+    "decided_by",
+    "reason_code",
+    "decided_at",
+}
+_APPROVAL_CLAIM_FIELDS = {
+    "claim_id",
+    "proposal_id",
+    "approval_id",
+    "action_id",
+    "gate_decision_id",
+    "gate_decision_sha256",
+    "claimed_at",
+}
+_APPROVAL_COMPLETION_FIELDS = {
+    "completion_id",
+    "claim_id",
+    "outcome",
+    "reason_code",
+    "completed_at",
+}
 _SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _Reevaluator = Callable[
     [Mapping[str, Any], str],
     tuple[Mapping[str, Any], str | None],
@@ -60,6 +103,18 @@ class ReceiptConflict(ValueError):
 
 class ActionDecisionConflict(ValueError):
     """Raised when an action decision ID is reused with different content."""
+
+
+class ActionProposalConflict(ValueError):
+    """Raised when a proposal or action ID is reused with different content."""
+
+
+class HumanApprovalConflict(ValueError):
+    """Raised when an immutable human decision is contradicted."""
+
+
+class ApprovalExecutionConflict(ValueError):
+    """Raised when an execution audit record conflicts with persisted state."""
 
 
 def _canonical_json(value: Any) -> str:
@@ -223,6 +278,189 @@ class TruthRepository:
                         END
                     BEGIN
                         SELECT RAISE(ABORT, 'inconsistent action decision');
+                    END;
+
+                CREATE TABLE IF NOT EXISTS action_proposals (
+                    proposal_id TEXT PRIMARY KEY,
+                    storage_id TEXT NOT NULL
+                        REFERENCES receipts(storage_id),
+                    action_id TEXT NOT NULL UNIQUE,
+                    policy_id TEXT NOT NULL CHECK (
+                        policy_id IN ('healthy_only', 'trusted_completion')
+                    ),
+                    action_kind TEXT NOT NULL,
+                    payload_sha256 TEXT NOT NULL CHECK (
+                        length(payload_sha256) = 64
+                        AND payload_sha256 NOT GLOB '*[^0-9a-f]*'
+                    ),
+                    requested_by TEXT NOT NULL,
+                    risk TEXT NOT NULL CHECK (
+                        risk IN ('low', 'medium', 'high', 'critical')
+                    ),
+                    created_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    proposal_sha256 TEXT NOT NULL CHECK (
+                        length(proposal_sha256) = 64
+                        AND proposal_sha256 NOT GLOB '*[^0-9a-f]*'
+                    )
+                );
+                CREATE INDEX IF NOT EXISTS idx_action_proposals_recent
+                    ON action_proposals(created_at DESC, proposal_id DESC);
+                CREATE TRIGGER IF NOT EXISTS action_proposals_no_update
+                    BEFORE UPDATE ON action_proposals
+                    BEGIN
+                        SELECT RAISE(ABORT, 'action proposals are immutable');
+                    END;
+                CREATE TRIGGER IF NOT EXISTS action_proposals_no_delete
+                    BEFORE DELETE ON action_proposals
+                    BEGIN
+                        SELECT RAISE(ABORT, 'action proposals are immutable');
+                    END;
+
+                CREATE TABLE IF NOT EXISTS human_approval_decisions (
+                    approval_id TEXT PRIMARY KEY,
+                    proposal_id TEXT NOT NULL UNIQUE
+                        REFERENCES action_proposals(proposal_id),
+                    proposal_sha256 TEXT NOT NULL CHECK (
+                        length(proposal_sha256) = 64
+                        AND proposal_sha256 NOT GLOB '*[^0-9a-f]*'
+                    ),
+                    outcome TEXT NOT NULL CHECK (
+                        outcome IN ('approved', 'rejected')
+                    ),
+                    decided_by TEXT NOT NULL,
+                    reason_code TEXT NOT NULL,
+                    decided_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_human_approval_recent
+                    ON human_approval_decisions(
+                        decided_at DESC,
+                        approval_id DESC
+                    );
+                CREATE TRIGGER IF NOT EXISTS human_approval_no_update
+                    BEFORE UPDATE ON human_approval_decisions
+                    BEGIN
+                        SELECT RAISE(ABORT, 'human approval decisions are immutable');
+                    END;
+                CREATE TRIGGER IF NOT EXISTS human_approval_no_delete
+                    BEFORE DELETE ON human_approval_decisions
+                    BEGIN
+                        SELECT RAISE(ABORT, 'human approval decisions are immutable');
+                    END;
+                CREATE TRIGGER IF NOT EXISTS human_approval_consistent_insert
+                    BEFORE INSERT ON human_approval_decisions
+                    WHEN NOT EXISTS (
+                        SELECT 1
+                          FROM action_proposals AS p
+                         WHERE p.proposal_id = NEW.proposal_id
+                           AND p.proposal_sha256 = NEW.proposal_sha256
+                           AND NEW.decided_at >= p.created_at
+                           AND NEW.decided_at <= p.expires_at
+                    )
+                    BEGIN
+                        SELECT RAISE(ABORT, 'inconsistent human approval decision');
+                    END;
+
+                CREATE TABLE IF NOT EXISTS approval_execution_claims (
+                    claim_id TEXT PRIMARY KEY,
+                    proposal_id TEXT NOT NULL UNIQUE
+                        REFERENCES action_proposals(proposal_id),
+                    approval_id TEXT NOT NULL UNIQUE
+                        REFERENCES human_approval_decisions(approval_id),
+                    action_id TEXT NOT NULL UNIQUE,
+                    gate_decision_id TEXT NOT NULL UNIQUE
+                        REFERENCES action_decisions(decision_id),
+                    gate_decision_sha256 TEXT NOT NULL CHECK (
+                        length(gate_decision_sha256) = 64
+                        AND gate_decision_sha256 NOT GLOB '*[^0-9a-f]*'
+                    ),
+                    claimed_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_approval_claims_recent
+                    ON approval_execution_claims(
+                        claimed_at DESC,
+                        claim_id DESC
+                    );
+                CREATE TRIGGER IF NOT EXISTS approval_claims_no_update
+                    BEFORE UPDATE ON approval_execution_claims
+                    BEGIN
+                        SELECT RAISE(ABORT, 'approval execution claims are immutable');
+                    END;
+                CREATE TRIGGER IF NOT EXISTS approval_claims_no_delete
+                    BEFORE DELETE ON approval_execution_claims
+                    BEGIN
+                        SELECT RAISE(ABORT, 'approval execution claims are immutable');
+                    END;
+                CREATE TRIGGER IF NOT EXISTS approval_claims_consistent_insert
+                    BEFORE INSERT ON approval_execution_claims
+                    WHEN NOT EXISTS (
+                        SELECT 1
+                          FROM action_proposals AS p
+                          JOIN human_approval_decisions AS a
+                            ON a.proposal_id = p.proposal_id
+                          JOIN action_decisions AS g
+                            ON g.decision_id = NEW.gate_decision_id
+                          JOIN verdicts AS v
+                            ON v.id = (
+                                SELECT MAX(v2.id)
+                                  FROM verdicts AS v2
+                                 WHERE v2.storage_id = p.storage_id
+                            )
+                         WHERE p.proposal_id = NEW.proposal_id
+                           AND p.action_id = NEW.action_id
+                           AND a.approval_id = NEW.approval_id
+                           AND a.proposal_sha256 = p.proposal_sha256
+                           AND a.outcome = 'approved'
+                           AND NEW.claimed_at >= a.decided_at
+                           AND NEW.claimed_at <= p.expires_at
+                           AND g.storage_id = p.storage_id
+                           AND g.action_id = p.action_id
+                           AND g.policy_id = p.policy_id
+                           AND g.authorized = 1
+                           AND g.decided_at <= NEW.claimed_at
+                           AND g.observed_verdict = v.verdict
+                           AND v.fresh_until IS NOT NULL
+                           AND v.fresh_until >= NEW.claimed_at
+                    )
+                    BEGIN
+                        SELECT RAISE(ABORT, 'inconsistent approval execution claim');
+                    END;
+
+                CREATE TABLE IF NOT EXISTS approval_execution_completions (
+                    completion_id TEXT PRIMARY KEY,
+                    claim_id TEXT NOT NULL UNIQUE
+                        REFERENCES approval_execution_claims(claim_id),
+                    outcome TEXT NOT NULL CHECK (
+                        outcome IN ('succeeded', 'failed')
+                    ),
+                    reason_code TEXT NOT NULL,
+                    completed_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_approval_completions_recent
+                    ON approval_execution_completions(
+                        completed_at DESC,
+                        completion_id DESC
+                    );
+                CREATE TRIGGER IF NOT EXISTS approval_completions_no_update
+                    BEFORE UPDATE ON approval_execution_completions
+                    BEGIN
+                        SELECT RAISE(ABORT, 'approval completions are immutable');
+                    END;
+                CREATE TRIGGER IF NOT EXISTS approval_completions_no_delete
+                    BEFORE DELETE ON approval_execution_completions
+                    BEGIN
+                        SELECT RAISE(ABORT, 'approval completions are immutable');
+                    END;
+                CREATE TRIGGER IF NOT EXISTS approval_completions_consistent_insert
+                    BEFORE INSERT ON approval_execution_completions
+                    WHEN NOT EXISTS (
+                        SELECT 1
+                          FROM approval_execution_claims AS c
+                         WHERE c.claim_id = NEW.claim_id
+                           AND NEW.completed_at >= c.claimed_at
+                    )
+                    BEGIN
+                        SELECT RAISE(ABORT, 'inconsistent approval completion');
                     END;
                 """
             )
@@ -488,6 +726,679 @@ class TruthRepository:
                 parameters,
             ).fetchall()
         return [self._decode_action_decision(row) for row in rows]
+
+    @staticmethod
+    def _approval_timestamp(name: str, value: Any) -> str:
+        if not isinstance(value, str) or not value or len(value) > 40:
+            raise ValueError(f"{name} must be an RFC 3339 timestamp")
+        candidate = value[:-1] + "+00:00" if value.endswith("Z") else value
+        try:
+            parsed = datetime.fromisoformat(candidate)
+        except ValueError as exc:
+            raise ValueError(f"{name} must be an RFC 3339 timestamp") from exc
+        if parsed.tzinfo is None:
+            raise ValueError(f"{name} must include a timezone")
+        return (
+            parsed.astimezone(timezone.utc)
+            .isoformat(timespec="microseconds")
+            .replace("+00:00", "Z")
+        )
+
+    @staticmethod
+    def _approval_safe_id(name: str, value: Any) -> str:
+        if not isinstance(value, str) or not _SAFE_ID_RE.fullmatch(value):
+            raise ValueError(f"{name} must be a safe 1-128 character identifier")
+        return value
+
+    @staticmethod
+    def _approval_sha256(name: str, value: Any) -> str:
+        if not isinstance(value, str) or not _SHA256_RE.fullmatch(value):
+            raise ValueError(f"{name} must be a lowercase SHA-256 digest")
+        return value
+
+    @staticmethod
+    def _decode_action_proposal(row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "proposal_id": row["proposal_id"],
+            "storage_id": row["storage_id"],
+            "action_id": row["action_id"],
+            "policy_id": row["policy_id"],
+            "action_kind": row["action_kind"],
+            "payload_sha256": row["payload_sha256"],
+            "requested_by": row["requested_by"],
+            "risk": row["risk"],
+            "created_at": row["created_at"],
+            "expires_at": row["expires_at"],
+            "proposal_sha256": row["proposal_sha256"],
+        }
+
+    @classmethod
+    def _validate_action_proposal(
+        cls,
+        proposal: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        if not isinstance(proposal, Mapping) or set(proposal) != _APPROVAL_PROPOSAL_FIELDS:
+            raise ValueError("action proposal contains unsupported fields")
+        item: dict[str, Any] = {}
+        for field in (
+            "proposal_id",
+            "storage_id",
+            "action_id",
+            "action_kind",
+            "requested_by",
+        ):
+            item[field] = cls._approval_safe_id(field, proposal.get(field))
+        policy_id = proposal.get("policy_id")
+        if policy_id not in _APPROVAL_POLICIES:
+            raise ValueError("unsupported action policy")
+        item["policy_id"] = policy_id
+        item["payload_sha256"] = cls._approval_sha256(
+            "payload_sha256",
+            proposal.get("payload_sha256"),
+        )
+        risk = proposal.get("risk")
+        if risk not in _APPROVAL_RISKS:
+            raise ValueError("unsupported action risk")
+        item["risk"] = risk
+        item["created_at"] = cls._approval_timestamp(
+            "created_at",
+            proposal.get("created_at"),
+        )
+        item["expires_at"] = cls._approval_timestamp(
+            "expires_at",
+            proposal.get("expires_at"),
+        )
+        if item["created_at"] >= item["expires_at"]:
+            raise ValueError("action proposal must expire after it is created")
+        item["proposal_sha256"] = cls._approval_sha256(
+            "proposal_sha256",
+            proposal.get("proposal_sha256"),
+        )
+        expected_hash = hashlib.sha256(
+            _canonical_json(
+                {
+                    field: item[field]
+                    for field in sorted(_APPROVAL_PROPOSAL_FIELDS - {"proposal_sha256"})
+                }
+            ).encode("utf-8")
+        ).hexdigest()
+        if item["proposal_sha256"] != expected_hash:
+            raise ValueError("action proposal hash does not match its fields")
+        return item
+
+    def save_action_proposal(
+        self,
+        proposal: Mapping[str, Any],
+    ) -> tuple[dict[str, Any], bool]:
+        """Insert one immutable proposal; semantic retries return the first row."""
+
+        item = self._validate_action_proposal(proposal)
+        columns = (
+            "proposal_id, storage_id, action_id, policy_id, action_kind, "
+            "payload_sha256, requested_by, risk, created_at, expires_at, "
+            "proposal_sha256"
+        )
+        semantic_fields = (
+            "proposal_id",
+            "storage_id",
+            "action_id",
+            "policy_id",
+            "action_kind",
+            "payload_sha256",
+            "requested_by",
+            "risk",
+            "expires_at",
+        )
+        with self._lock, closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                existing = connection.execute(
+                    f"""
+                    SELECT {columns}
+                      FROM action_proposals
+                     WHERE proposal_id = ? OR action_id = ?
+                    """,
+                    (item["proposal_id"], item["action_id"]),
+                ).fetchone()
+                if existing is not None:
+                    decoded = self._decode_action_proposal(existing)
+                    if all(decoded[field] == item[field] for field in semantic_fields):
+                        connection.commit()
+                        return decoded, False
+                    raise ActionProposalConflict(
+                        "proposal_id or action_id already has different content"
+                    )
+                connection.execute(
+                    """
+                    INSERT INTO action_proposals
+                        (
+                            proposal_id, storage_id, action_id, policy_id,
+                            action_kind, payload_sha256, requested_by, risk,
+                            created_at, expires_at, proposal_sha256
+                        )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        item["proposal_id"],
+                        item["storage_id"],
+                        item["action_id"],
+                        item["policy_id"],
+                        item["action_kind"],
+                        item["payload_sha256"],
+                        item["requested_by"],
+                        item["risk"],
+                        item["created_at"],
+                        item["expires_at"],
+                        item["proposal_sha256"],
+                    ),
+                )
+                connection.commit()
+                return item, True
+            except Exception:
+                connection.rollback()
+                raise
+
+    def get_action_proposal(self, proposal_id: str) -> dict[str, Any] | None:
+        if not isinstance(proposal_id, str) or not _SAFE_ID_RE.fullmatch(proposal_id):
+            return None
+        with self._lock, closing(self._connect()) as connection:
+            row = connection.execute(
+                """
+                SELECT proposal_id, storage_id, action_id, policy_id,
+                       action_kind, payload_sha256, requested_by, risk,
+                       created_at, expires_at, proposal_sha256
+                  FROM action_proposals
+                 WHERE proposal_id = ?
+                """,
+                (proposal_id,),
+            ).fetchone()
+        return self._decode_action_proposal(row) if row is not None else None
+
+    def list_action_proposals(
+        self,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        if not isinstance(limit, int) or not 1 <= limit <= 500:
+            raise ValueError("limit must be between 1 and 500")
+        if not isinstance(offset, int) or not 0 <= offset <= 1_000_000:
+            raise ValueError("offset must be between 0 and 1,000,000")
+        with self._lock, closing(self._connect()) as connection:
+            rows = connection.execute(
+                """
+                SELECT proposal_id, storage_id, action_id, policy_id,
+                       action_kind, payload_sha256, requested_by, risk,
+                       created_at, expires_at, proposal_sha256
+                  FROM action_proposals
+                 ORDER BY created_at DESC, proposal_id DESC
+                 LIMIT ? OFFSET ?
+                """,
+                (limit, offset),
+            ).fetchall()
+        return [self._decode_action_proposal(row) for row in rows]
+
+    @staticmethod
+    def _decode_human_approval(row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "approval_id": row["approval_id"],
+            "proposal_id": row["proposal_id"],
+            "proposal_sha256": row["proposal_sha256"],
+            "outcome": row["outcome"],
+            "decided_by": row["decided_by"],
+            "reason_code": row["reason_code"],
+            "decided_at": row["decided_at"],
+        }
+
+    @classmethod
+    def _validate_human_approval(
+        cls,
+        decision: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        if not isinstance(decision, Mapping) or set(decision) != _APPROVAL_DECISION_FIELDS:
+            raise ValueError("human approval decision contains unsupported fields")
+        item: dict[str, Any] = {}
+        for field in (
+            "approval_id",
+            "proposal_id",
+            "decided_by",
+            "reason_code",
+        ):
+            item[field] = cls._approval_safe_id(field, decision.get(field))
+        item["proposal_sha256"] = cls._approval_sha256(
+            "proposal_sha256",
+            decision.get("proposal_sha256"),
+        )
+        outcome = decision.get("outcome")
+        if outcome not in _APPROVAL_OUTCOMES:
+            raise ValueError("human outcome must be approved or rejected")
+        item["outcome"] = outcome
+        item["decided_at"] = cls._approval_timestamp(
+            "decided_at",
+            decision.get("decided_at"),
+        )
+        return item
+
+    def save_human_approval(
+        self,
+        decision: Mapping[str, Any],
+    ) -> tuple[dict[str, Any], bool]:
+        """Insert the one terminal human decision for a proposal."""
+
+        item = self._validate_human_approval(decision)
+        semantic_fields = (
+            "proposal_id",
+            "proposal_sha256",
+            "outcome",
+            "decided_by",
+            "reason_code",
+        )
+        with self._lock, closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                existing = connection.execute(
+                    """
+                    SELECT approval_id, proposal_id, proposal_sha256, outcome,
+                           decided_by, reason_code, decided_at
+                      FROM human_approval_decisions
+                     WHERE proposal_id = ? OR approval_id = ?
+                    """,
+                    (item["proposal_id"], item["approval_id"]),
+                ).fetchone()
+                if existing is not None:
+                    decoded = self._decode_human_approval(existing)
+                    if all(decoded[field] == item[field] for field in semantic_fields):
+                        connection.commit()
+                        return decoded, False
+                    raise HumanApprovalConflict(
+                        "proposal already has a different human decision"
+                    )
+                proposal = connection.execute(
+                    """
+                    SELECT proposal_sha256, created_at, expires_at
+                      FROM action_proposals
+                     WHERE proposal_id = ?
+                    """,
+                    (item["proposal_id"],),
+                ).fetchone()
+                if proposal is None:
+                    raise HumanApprovalConflict("action proposal does not exist")
+                if (
+                    proposal["proposal_sha256"] != item["proposal_sha256"]
+                    or item["decided_at"] < proposal["created_at"]
+                    or item["decided_at"] > proposal["expires_at"]
+                ):
+                    raise HumanApprovalConflict(
+                        "human decision is not bound to a live proposal"
+                    )
+                connection.execute(
+                    """
+                    INSERT INTO human_approval_decisions
+                        (
+                            approval_id, proposal_id, proposal_sha256, outcome,
+                            decided_by, reason_code, decided_at
+                        )
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        item["approval_id"],
+                        item["proposal_id"],
+                        item["proposal_sha256"],
+                        item["outcome"],
+                        item["decided_by"],
+                        item["reason_code"],
+                        item["decided_at"],
+                    ),
+                )
+                connection.commit()
+                return item, True
+            except Exception:
+                connection.rollback()
+                raise
+
+    def get_human_approval(
+        self,
+        proposal_id: str,
+    ) -> dict[str, Any] | None:
+        if not isinstance(proposal_id, str) or not _SAFE_ID_RE.fullmatch(proposal_id):
+            return None
+        with self._lock, closing(self._connect()) as connection:
+            row = connection.execute(
+                """
+                SELECT approval_id, proposal_id, proposal_sha256, outcome,
+                       decided_by, reason_code, decided_at
+                  FROM human_approval_decisions
+                 WHERE proposal_id = ?
+                """,
+                (proposal_id,),
+            ).fetchone()
+        return self._decode_human_approval(row) if row is not None else None
+
+    @staticmethod
+    def _decode_approval_claim(row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "claim_id": row["claim_id"],
+            "proposal_id": row["proposal_id"],
+            "approval_id": row["approval_id"],
+            "action_id": row["action_id"],
+            "gate_decision_id": row["gate_decision_id"],
+            "gate_decision_sha256": row["gate_decision_sha256"],
+            "claimed_at": row["claimed_at"],
+        }
+
+    @classmethod
+    def _validate_approval_claim(
+        cls,
+        claim: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        if not isinstance(claim, Mapping) or set(claim) != _APPROVAL_CLAIM_FIELDS:
+            raise ValueError("approval execution claim contains unsupported fields")
+        item: dict[str, Any] = {}
+        for field in (
+            "claim_id",
+            "proposal_id",
+            "approval_id",
+            "action_id",
+            "gate_decision_id",
+        ):
+            item[field] = cls._approval_safe_id(field, claim.get(field))
+        item["gate_decision_sha256"] = cls._approval_sha256(
+            "gate_decision_sha256",
+            claim.get("gate_decision_sha256"),
+        )
+        item["claimed_at"] = cls._approval_timestamp(
+            "claimed_at",
+            claim.get("claimed_at"),
+        )
+        return item
+
+    def claim_approved_execution(
+        self,
+        claim: Mapping[str, Any],
+        *,
+        gate_decision: Mapping[str, Any],
+    ) -> tuple[dict[str, Any], bool]:
+        """Atomically bind one execution claim to approval and current Truth."""
+
+        item = self._validate_approval_claim(claim)
+        normalized_gate = self._validate_action_decision(gate_decision)
+        gate_hash = hashlib.sha256(
+            _canonical_json(normalized_gate).encode("utf-8")
+        ).hexdigest()
+        if (
+            normalized_gate["decision_id"] != item["gate_decision_id"]
+            or gate_hash != item["gate_decision_sha256"]
+        ):
+            raise ApprovalExecutionConflict(
+                "execution claim does not match the audited gate decision"
+            )
+
+        with self._lock, closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                existing = connection.execute(
+                    """
+                    SELECT claim_id, proposal_id, approval_id, action_id,
+                           gate_decision_id, gate_decision_sha256, claimed_at
+                      FROM approval_execution_claims
+                     WHERE proposal_id = ? OR action_id = ? OR claim_id = ?
+                    """,
+                    (
+                        item["proposal_id"],
+                        item["action_id"],
+                        item["claim_id"],
+                    ),
+                ).fetchone()
+                if existing is not None:
+                    decoded = self._decode_approval_claim(existing)
+                    if (
+                        decoded["proposal_id"] == item["proposal_id"]
+                        and decoded["action_id"] == item["action_id"]
+                    ):
+                        connection.commit()
+                        return decoded, False
+                    raise ApprovalExecutionConflict(
+                        "execution claim identifier already has different content"
+                    )
+
+                approval = connection.execute(
+                    """
+                    SELECT p.storage_id, p.action_id, p.policy_id,
+                           p.proposal_sha256, p.created_at, p.expires_at,
+                           a.approval_id, a.proposal_sha256 AS approved_hash,
+                           a.outcome, a.decided_at
+                      FROM action_proposals AS p
+                      LEFT JOIN human_approval_decisions AS a
+                        ON a.proposal_id = p.proposal_id
+                     WHERE p.proposal_id = ?
+                    """,
+                    (item["proposal_id"],),
+                ).fetchone()
+                if (
+                    approval is None
+                    or approval["approval_id"] != item["approval_id"]
+                    or approval["outcome"] != "approved"
+                    or approval["approved_hash"] != approval["proposal_sha256"]
+                    or approval["action_id"] != item["action_id"]
+                    or item["claimed_at"] < approval["decided_at"]
+                    or item["claimed_at"] > approval["expires_at"]
+                ):
+                    raise ApprovalExecutionConflict(
+                        "execution is not backed by a current human approval"
+                    )
+
+                stored_gate = connection.execute(
+                    """
+                    SELECT decision_id, storage_id, action_id, policy_id,
+                           observed_verdict, authorized, reason_codes_json,
+                           decided_at
+                      FROM action_decisions
+                     WHERE decision_id = ?
+                    """,
+                    (item["gate_decision_id"],),
+                ).fetchone()
+                if stored_gate is None:
+                    raise ApprovalExecutionConflict(
+                        "audited gate decision is unavailable"
+                    )
+                decoded_gate = self._decode_action_decision(stored_gate)
+                if (
+                    decoded_gate != normalized_gate
+                    or not decoded_gate["authorized"]
+                    or decoded_gate["storage_id"] != approval["storage_id"]
+                    or decoded_gate["action_id"] != approval["action_id"]
+                    or decoded_gate["policy_id"] != approval["policy_id"]
+                    or decoded_gate["decided_at"] > item["claimed_at"]
+                ):
+                    raise ApprovalExecutionConflict(
+                        "gate decision is not bound to the approved action"
+                    )
+
+                latest = connection.execute(
+                    """
+                    SELECT verdict, fresh_until
+                      FROM verdicts
+                     WHERE storage_id = ?
+                     ORDER BY id DESC
+                     LIMIT 1
+                    """,
+                    (approval["storage_id"],),
+                ).fetchone()
+                policy_allows = (
+                    latest is not None
+                    and (
+                        latest["verdict"] == "healthy"
+                        or (
+                            latest["verdict"] == "verified_no_work"
+                            and approval["policy_id"] == "trusted_completion"
+                        )
+                    )
+                )
+                if (
+                    not policy_allows
+                    or latest["verdict"] != decoded_gate["observed_verdict"]
+                    or latest["fresh_until"] is None
+                    or latest["fresh_until"] < item["claimed_at"]
+                ):
+                    raise ApprovalExecutionConflict(
+                        "Truth changed or expired before execution claim"
+                    )
+                connection.execute(
+                    """
+                    INSERT INTO approval_execution_claims
+                        (
+                            claim_id, proposal_id, approval_id, action_id,
+                            gate_decision_id, gate_decision_sha256, claimed_at
+                        )
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        item["claim_id"],
+                        item["proposal_id"],
+                        item["approval_id"],
+                        item["action_id"],
+                        item["gate_decision_id"],
+                        item["gate_decision_sha256"],
+                        item["claimed_at"],
+                    ),
+                )
+                connection.commit()
+                return item, True
+            except Exception:
+                connection.rollback()
+                raise
+
+    def get_approval_execution_claim(
+        self,
+        proposal_id: str,
+    ) -> dict[str, Any] | None:
+        if not isinstance(proposal_id, str) or not _SAFE_ID_RE.fullmatch(proposal_id):
+            return None
+        with self._lock, closing(self._connect()) as connection:
+            row = connection.execute(
+                """
+                SELECT claim_id, proposal_id, approval_id, action_id,
+                       gate_decision_id, gate_decision_sha256, claimed_at
+                  FROM approval_execution_claims
+                 WHERE proposal_id = ?
+                """,
+                (proposal_id,),
+            ).fetchone()
+        return self._decode_approval_claim(row) if row is not None else None
+
+    @staticmethod
+    def _decode_approval_completion(row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "completion_id": row["completion_id"],
+            "claim_id": row["claim_id"],
+            "outcome": row["outcome"],
+            "reason_code": row["reason_code"],
+            "completed_at": row["completed_at"],
+        }
+
+    @classmethod
+    def _validate_approval_completion(
+        cls,
+        completion: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        if (
+            not isinstance(completion, Mapping)
+            or set(completion) != _APPROVAL_COMPLETION_FIELDS
+        ):
+            raise ValueError("approval completion contains unsupported fields")
+        item: dict[str, Any] = {}
+        for field in ("completion_id", "claim_id", "reason_code"):
+            item[field] = cls._approval_safe_id(field, completion.get(field))
+        outcome = completion.get("outcome")
+        if outcome not in _APPROVAL_COMPLETION_OUTCOMES:
+            raise ValueError("unsupported approval completion outcome")
+        item["outcome"] = outcome
+        item["completed_at"] = cls._approval_timestamp(
+            "completed_at",
+            completion.get("completed_at"),
+        )
+        return item
+
+    def save_approval_execution_completion(
+        self,
+        completion: Mapping[str, Any],
+    ) -> tuple[dict[str, Any], bool]:
+        """Persist the one immutable, payload-free completion for a claim."""
+
+        item = self._validate_approval_completion(completion)
+        semantic_fields = ("claim_id", "outcome", "reason_code")
+        with self._lock, closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                existing = connection.execute(
+                    """
+                    SELECT completion_id, claim_id, outcome, reason_code,
+                           completed_at
+                      FROM approval_execution_completions
+                     WHERE claim_id = ? OR completion_id = ?
+                    """,
+                    (item["claim_id"], item["completion_id"]),
+                ).fetchone()
+                if existing is not None:
+                    decoded = self._decode_approval_completion(existing)
+                    if all(decoded[field] == item[field] for field in semantic_fields):
+                        connection.commit()
+                        return decoded, False
+                    raise ApprovalExecutionConflict(
+                        "execution claim already has a different completion"
+                    )
+                claim = connection.execute(
+                    """
+                    SELECT claimed_at
+                      FROM approval_execution_claims
+                     WHERE claim_id = ?
+                    """,
+                    (item["claim_id"],),
+                ).fetchone()
+                if claim is None or item["completed_at"] < claim["claimed_at"]:
+                    raise ApprovalExecutionConflict(
+                        "completion is not bound to a valid execution claim"
+                    )
+                connection.execute(
+                    """
+                    INSERT INTO approval_execution_completions
+                        (
+                            completion_id, claim_id, outcome, reason_code,
+                            completed_at
+                        )
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        item["completion_id"],
+                        item["claim_id"],
+                        item["outcome"],
+                        item["reason_code"],
+                        item["completed_at"],
+                    ),
+                )
+                connection.commit()
+                return item, True
+            except Exception:
+                connection.rollback()
+                raise
+
+    def get_approval_execution_completion(
+        self,
+        claim_id: str,
+    ) -> dict[str, Any] | None:
+        if not isinstance(claim_id, str) or not _SAFE_ID_RE.fullmatch(claim_id):
+            return None
+        with self._lock, closing(self._connect()) as connection:
+            row = connection.execute(
+                """
+                SELECT completion_id, claim_id, outcome, reason_code,
+                       completed_at
+                  FROM approval_execution_completions
+                 WHERE claim_id = ?
+                """,
+                (claim_id,),
+            ).fetchone()
+        return self._decode_approval_completion(row) if row is not None else None
 
     def configure_stale_reevaluation(
         self,

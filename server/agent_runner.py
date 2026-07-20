@@ -5,9 +5,9 @@ Running an agent = calling the chat orchestrator with that prompt as
 the member's message, capturing the LLM's reply, writing it to disk
 as a dated markdown brief, and tracking the run in `globus_agent_runs`.
 
-The orchestrator already has every tool the member has wired up
-(search_files, list_recent_emails, search_telegram, etc.), so the
-agent inherits the full member context for free.
+The orchestrator keeps the member's data context, but each agent receives only
+the exact tools in its catalog ``tool_allowlist``. Missing or malformed grants
+fail closed before a model call.
 
 Public surface:
   - run_agent_for_member(agent_name, email) — synchronous; returns
@@ -33,6 +33,7 @@ from datetime import datetime, timezone
 import db_helpers
 from db_helpers import db_read, db_write
 from globus_agents_catalog import GLOBUS_AGENTS_CATALOG
+from globus_tool_policy import ToolPolicyError, agent_tool_allowlist
 
 
 # Source installs start with ``python3 server/globus_server.py``, which puts
@@ -222,6 +223,14 @@ def run_agent_for_member(agent_name, email):
         return {"ok": False, "agent": agent_name,
                 "error": f"agent {agent_name!r} has no task_prompt "
                           "in the catalog"}
+    try:
+        allowed_tools = agent_tool_allowlist(agent)
+    except ToolPolicyError as exc:
+        return {
+            "ok": False,
+            "agent": agent_name,
+            "error": f"AgentToolPolicyError: {exc}",
+        }
 
     ensure_member_work_dir(email)
     run_id = _insert_run(email, agent_name)
@@ -263,7 +272,12 @@ def run_agent_for_member(agent_name, email):
         # Local import to keep the module-load cycle small. Orchestrator
         # imports a lot — agents may load on cron with no other code.
         from globus_orchestrator import globus_chat_send
-        reply, _usage = globus_chat_send(email, task)
+        reply, _usage = globus_chat_send(
+            email,
+            task,
+            allowed_tools=allowed_tools,
+            agent_name=agent_name,
+        )
         body = (reply or "").strip() or "(empty reply)"
         path = _brief_path(email, agent_name, run_id)
         header = (

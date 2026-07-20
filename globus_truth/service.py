@@ -209,6 +209,97 @@ class TruthService:
         """Return recent privacy-safe Action Gate decisions."""
         return self.repository.list_action_decisions(limit=limit)
 
+    def approval_center(self) -> Any:
+        """Return the durable human-consent coordinator for this service."""
+        from .approval_center import ApprovalCenter
+
+        return ApprovalCenter(self, clock=self._now)
+
+    def submit_action_proposal(
+        self,
+        *,
+        proposal_id: str,
+        storage_id: str,
+        action_id: str,
+        policy_id: str,
+        action_kind: str,
+        payload_sha256: str,
+        requested_by: str,
+        risk: str,
+        expires_at: str,
+    ) -> dict[str, Any]:
+        """Persist a privacy-safe, exact-action proposal for human review."""
+        return self.approval_center().submit(
+            proposal_id=proposal_id,
+            storage_id=storage_id,
+            action_id=action_id,
+            policy_id=policy_id,
+            action_kind=action_kind,
+            payload_sha256=payload_sha256,
+            requested_by=requested_by,
+            risk=risk,
+            expires_at=expires_at,
+        )
+
+    def decide_action_proposal(
+        self,
+        proposal_id: str,
+        *,
+        outcome: str,
+        decided_by: str,
+        reason_code: str,
+    ) -> dict[str, Any]:
+        """Record one irreversible human approval or rejection."""
+        return self.approval_center().decide(
+            proposal_id,
+            outcome=outcome,
+            decided_by=decided_by,
+            reason_code=reason_code,
+        )
+
+    def get_approval_proposal(self, proposal_id: str) -> dict[str, Any] | None:
+        """Return one proposal with its derived durable state."""
+        return self.approval_center().get(proposal_id)
+
+    def list_approval_proposals(
+        self,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        """Return recent proposals without action payloads."""
+        return self.approval_center().list(limit=limit, offset=offset)
+
+    def stage_approval_challenge(
+        self,
+        *,
+        artifact_root: Any | None = None,
+    ) -> dict[str, Any]:
+        """Pause one generated high-risk action for a real human decision."""
+        from .approval_challenge import stage_approval_center_challenge
+
+        return stage_approval_center_challenge(
+            self,
+            artifact_root=artifact_root,
+        )
+
+    def resolve_approval_challenge(
+        self,
+        proposal_id: str,
+        *,
+        disposition: str,
+        artifact_root: Any | None = None,
+    ) -> dict[str, Any]:
+        """Resolve and prove the generated exact-action challenge."""
+        from .approval_challenge import resolve_approval_center_challenge
+
+        return resolve_approval_center_challenge(
+            self,
+            proposal_id,
+            disposition=disposition,
+            artifact_root=artifact_root,
+        )
+
     def run_outcome_gate_challenge(
         self,
         *,

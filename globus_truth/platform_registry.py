@@ -133,17 +133,22 @@ _SECRET_VALUE_PATTERNS = (
     re.compile(r"\bBearer\s+[A-Za-z0-9._~+/-]{16,}", re.IGNORECASE),
 )
 
-# These relationships are all visible in the built-in agents' task prompts.
-# They are static on purpose: graph construction remains free of server imports.
+# These relationships mirror the built-in agents' enforced ``tool_allowlist``
+# fields. They remain static so registry loading never imports server modules or
+# evaluates runtime configuration; a source-backed test prevents drift.
 _AGENT_TOOL_RELATIONS = {
     "agent.research": (
         "tool.search_files",
+        "tool.read_file",
+        "tool.search_content",
         "tool.list_recent_emails",
         "tool.search_whatsapp",
         "tool.search_telegram",
     ),
     "agent.sales-desk": (
         "tool.search_files",
+        "tool.read_file",
+        "tool.search_content",
         "tool.list_recent_emails",
     ),
     "agent.narada": (
@@ -153,8 +158,9 @@ _AGENT_TOOL_RELATIONS = {
     ),
     "agent.infra-watch": (
         "tool.search_files",
+        "tool.read_file",
+        "tool.search_content",
         "tool.list_recent_emails",
-        "tool.send_telegram_via_bot",
     ),
 }
 

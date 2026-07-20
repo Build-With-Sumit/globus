@@ -12,9 +12,22 @@ from typing import Any
 
 from . import __version__
 from .action_gate import ActionGateAuditError, POLICIES
+from .approval_center import (
+    ApprovalAuditError,
+    ApprovalCenterError,
+    OUTCOMES as APPROVAL_OUTCOMES,
+    RISKS as APPROVAL_RISKS,
+)
 from .evaluator import evaluate_receipt
 from .service import TruthService
-from .storage import ActionDecisionConflict, ReceiptConflict, TruthRepository
+from .storage import (
+    ActionDecisionConflict,
+    ActionProposalConflict,
+    ApprovalExecutionConflict,
+    HumanApprovalConflict,
+    ReceiptConflict,
+    TruthRepository,
+)
 from .web import TruthHTTPServer
 
 DEFAULT_DATABASE = "globus-truth.db"
@@ -133,6 +146,70 @@ def build_parser() -> argparse.ArgumentParser:
         "--artifact-root",
         help="optional directory for isolated challenge artifacts",
     )
+
+    proposal = subparsers.add_parser(
+        "approval-propose",
+        help="stage one payload-free exact action for human review",
+    )
+    database_options(proposal)
+    proposal.add_argument("storage_id", help="persisted Truth receipt identifier")
+    proposal.add_argument("--proposal-id", required=True)
+    proposal.add_argument("--action-id", required=True)
+    proposal.add_argument("--action-kind", required=True)
+    proposal.add_argument("--payload-sha256", required=True)
+    proposal.add_argument("--requested-by", required=True)
+    proposal.add_argument("--expires-at", required=True)
+    proposal.add_argument(
+        "--policy",
+        choices=sorted(POLICIES),
+        default="healthy_only",
+    )
+    proposal.add_argument(
+        "--risk",
+        choices=sorted(APPROVAL_RISKS),
+        default="high",
+    )
+
+    approval_decide = subparsers.add_parser(
+        "approval-decide",
+        help="immutably approve or reject one exact action proposal",
+    )
+    database_options(approval_decide)
+    approval_decide.add_argument("proposal_id")
+    approval_decide.add_argument(
+        "--outcome",
+        choices=sorted(APPROVAL_OUTCOMES),
+        required=True,
+    )
+    approval_decide.add_argument("--decided-by", required=True)
+    approval_decide.add_argument("--reason-code", required=True)
+
+    approval_list = subparsers.add_parser(
+        "approval-list",
+        help="list privacy-safe action proposals and derived states",
+    )
+    database_options(approval_list)
+    approval_list.add_argument("--limit", type=int, default=100)
+    approval_list.add_argument("--offset", type=int, default=0)
+
+    approval_challenge = subparsers.add_parser(
+        "approval-challenge",
+        help="stage or resolve the credential-free exact-action proof",
+    )
+    database_options(approval_challenge)
+    approval_challenge.add_argument(
+        "--artifact-root",
+        help="optional directory for isolated challenge artifacts",
+    )
+    approval_challenge.add_argument(
+        "--proposal-id",
+        help="staged challenge proposal to resolve",
+    )
+    approval_challenge.add_argument(
+        "--decision",
+        choices=sorted(APPROVAL_OUTCOMES),
+        help="human decision for --proposal-id",
+    )
     return parser
 
 
@@ -144,13 +221,17 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(raw_argv)
     if hasattr(args, "stale_hours") and args.stale_hours <= 0:
         parser.error("--stale-hours must be greater than zero")
+    if args.command == "approval-challenge" and bool(args.proposal_id) != bool(
+        args.decision
+    ):
+        parser.error("--proposal-id and --decision must be supplied together")
     if args.command in {"serve", "demo"}:
         if not 0 <= args.port <= 65535:
             parser.error("--port must be between 0 and 65535")
         if args.host not in {"127.0.0.1", "localhost", "::1"}:
-            print(
-                "WARNING: binding beyond loopback exposes unauthenticated local run data.",
-                file=sys.stderr,
+            parser.error(
+                "--host must be 127.0.0.1, localhost, or ::1; "
+                "the Truth dashboard and approval API are local-only"
             )
         return _serve(args, load_demo=args.command == "demo")
     try:
@@ -176,12 +257,55 @@ def main(argv: list[str] | None = None) -> int:
             result = _service(args).run_outcome_gate_challenge(
                 artifact_root=args.artifact_root,
             )
+        elif args.command == "approval-propose":
+            result = _service(args).submit_action_proposal(
+                proposal_id=args.proposal_id,
+                storage_id=args.storage_id,
+                action_id=args.action_id,
+                policy_id=args.policy,
+                action_kind=args.action_kind,
+                payload_sha256=args.payload_sha256,
+                requested_by=args.requested_by,
+                risk=args.risk,
+                expires_at=args.expires_at,
+            )
+        elif args.command == "approval-decide":
+            result = _service(args).decide_action_proposal(
+                args.proposal_id,
+                outcome=args.outcome,
+                decided_by=args.decided_by,
+                reason_code=args.reason_code,
+            )
+        elif args.command == "approval-list":
+            result = {
+                "proposals": _service(args).list_approval_proposals(
+                    limit=args.limit,
+                    offset=args.offset,
+                )
+            }
+        elif args.command == "approval-challenge":
+            service = _service(args)
+            if args.proposal_id:
+                result = service.resolve_approval_challenge(
+                    args.proposal_id,
+                    disposition=args.decision,
+                    artifact_root=args.artifact_root,
+                )
+            else:
+                result = service.stage_approval_challenge(
+                    artifact_root=args.artifact_root,
+                )
         else:  # pragma: no cover - argparse prevents this
             parser.error("unknown command")
             return 2
     except (
         ActionDecisionConflict,
         ActionGateAuditError,
+        ActionProposalConflict,
+        ApprovalAuditError,
+        ApprovalCenterError,
+        ApprovalExecutionConflict,
+        HumanApprovalConflict,
         OSError,
         json.JSONDecodeError,
         ValueError,
@@ -193,6 +317,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "gate":
         return 0 if result["authorized"] else 1
     if args.command == "outcome-challenge":
+        return 0 if result.get("expectations_met") is True else 1
+    if args.command == "approval-challenge" and args.proposal_id:
         return 0 if result.get("expectations_met") is True else 1
     return 0
 

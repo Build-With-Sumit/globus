@@ -163,19 +163,18 @@ def send_otp_email(email, code):
 # Cookie / session helpers — thin wrappers around auth_cookies
 # ─────────────────────────────────────────────────────────────────────
 
-def parse_session_cookie(cookie_header):
+def parse_session_cookie(cookie_header, *, audience):
     """Extract the member email from a Cookie: header, or '' if no
     valid session cookie is present. Used by the route handlers as the
-    auth gate.
+    auth gate. Sessions are bound to the normalized arrival host.
 
-    Cookie name is `bws_member` (legacy from the buildwithsumit
-    reference impl — kept here for compat with the unchanged
-    auth_cookies module). Rename in a future major version if you want."""
+    Cookie name is `bws_member` (legacy from the buildwithsumit reference
+    implementation); its v2 signed payload is host-bound."""
     if not cookie_header:
         return ""
     from auth_cookies import verify_token
     for kv in cookie_header.split(";"):
         name, _, value = kv.strip().partition("=")
         if name == "bws_member":
-            return verify_token(value) or ""
+            return verify_token(value, audience=audience) or ""
     return ""

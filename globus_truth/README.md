@@ -5,10 +5,11 @@ Agents submit versioned run receipts; a deterministic evaluator checks the claim
 against timestamps, measured counts, evidence, heartbeats, and explicit checks
 before the run is allowed to look healthy.
 
-v0.13 adds **Mission Control** around that core: a source-backed platform
-capability registry, immutable fail-closed Action Gate decisions, and a
-credential-free business-outcome challenge that proves a contradictory
-destination read-back can prevent an action.
+v0.14 adds a **Consequence Firewall** around the v0.13 Mission Control core.
+Four built-in background agents receive exact, deny-by-default runtime tool
+grants, and high-risk actions can pause in a payload-free Approval Center.
+Human approval remains subordinate to a fresh Truth verdict immediately before
+a unique local execution claim.
 
 It exists because fluent output is not the same thing as successful work. The
 pre-existing Globus fleet has seen quiet pipelines report all-clear, declared
@@ -49,6 +50,16 @@ python -m globus_truth serve --db globus-truth.db
 python -m globus_truth outcome-challenge --db globus-truth.db
 python -m globus_truth gate --db globus-truth.db STORAGE_ID \
   --action-id review-follow-ups --policy healthy_only
+python -m globus_truth approval-propose --db globus-truth.db STORAGE_ID \
+  --proposal-id proposal-001 --action-id review-followup-001 \
+  --action-kind queue_follow_up_review \
+  --payload-sha256 0000000000000000000000000000000000000000000000000000000000000000 \
+  --requested-by operator:local --expires-at 2030-01-01T00:00:00Z
+python -m globus_truth approval-decide --db globus-truth.db proposal-001 \
+  --outcome approved --decided-by operator:local \
+  --reason-code scope_reviewed
+python -m globus_truth approval-list --db globus-truth.db
+python -m globus_truth approval-challenge --db globus-truth.db
 ```
 
 Use `-` instead of a filename to read a receipt from standard input.
@@ -60,6 +71,68 @@ invalid input or an audit failure. `healthy_only` accepts only `healthy`;
 `--artifact-root PATH` to choose where its generated per-run destination
 directories are written. It exits `0` only when `expectations_met` is exactly
 true; an incomplete proof exits `1`.
+
+`approval-challenge` without a proposal ID stages the credential-free proof and
+prints the pending proposal. Resolve it only after reviewing that output:
+
+```bash
+python -m globus_truth approval-challenge --db globus-truth.db \
+  --proposal-id PROPOSAL_ID --decision approved
+```
+
+The generic approval commands create, inspect, approve, and reject exact
+proposals. They do not expose a generic execution command or dispatch an
+arbitrary callback.
+
+## Consequence Firewall and Approval Center
+
+The Consequence Firewall has two independent boundaries.
+
+First, each of the four shipped background agents receives an explicit tool
+allowlist:
+
+| Built-in agent | Runtime tools |
+|---|---|
+| Research | `search_files`, `read_file`, `search_content`, `list_recent_emails`, `search_whatsapp`, `search_telegram` |
+| Sales Desk | `search_files`, `read_file`, `search_content`, `list_recent_emails` |
+| Narada | `narada_list_campaigns`, `narada_campaign_stats`, `narada_check_replies` |
+| Infra Watch | `search_files`, `read_file`, `search_content`, `list_recent_emails` |
+
+The orchestrator advertises only the granted schemas to the model and checks the
+tool name again before dispatcher invocation. Missing or empty grants fail
+closed for a named background agent, and a forged disallowed tool call returns
+`tool_not_allowed` without reaching the tool implementation. These runtime
+grants govern the four built-in background agents only; they do not make every
+entry in the 71-capability registry governed or live.
+
+Second, `ApprovalCenter` binds a consequential proposal to its Truth receipt,
+action, policy, action kind, requester, expiry, and payload SHA-256. The
+proposal and human decision are immutable. The database stores those IDs,
+hashes, metadata, and timestamps—not the raw action payload.
+
+An approval is necessary but not sufficient. On execution, the center:
+
+1. Rejects a changed payload hash.
+2. Rejects expired, missing, or rejected human consent.
+3. Asks the Action Gate for a fresh persisted Truth decision and reads that
+   exact decision back.
+4. Atomically rechecks the current Truth state and creates a unique execution
+   claim.
+5. Lets only the creator of that claim invoke the bounded callback.
+
+A person cannot override failed, contradictory, stale, or otherwise
+policy-ineligible Truth. Replays do not invoke the callback again. This is
+at-most-once execution inside the local SQLite coordinator; it is not an
+external exactly-once guarantee. Real provider integrations still need
+provider-side idempotency keys, acknowledgement read-back, and reconciliation.
+
+The dashboard's **Stage generated approval request** proof uses only generated
+local data. Before review, the local outbox contains zero actions. On approval,
+the proof tries a changed payload (blocked), the exact payload after a fresh
+Truth check (executed once), and an exact replay (blocked). Independent read-back
+ends with one local outbox row. Rejecting the proposal executes nothing. The
+proof needs no LLM, MySQL, credential, provider account, Docker runtime, or
+external call.
 
 ## Verified business-outcome challenge
 
@@ -108,9 +181,8 @@ one SQLite transaction; if either persistence fails, neither phase appears.
 
 ## Run the tests
 
-The v0.13 Truth/Mission Control suite contains 93 hermetic tests, including
-adversarial authorization, concurrency, privacy, HTTP, CLI, and real-runner
-coverage.
+The hermetic Truth/Mission Control suite includes adversarial authorization,
+concurrency, privacy, HTTP, CLI, and real-runner coverage.
 
 ```bash
 python -m compileall -q globus_truth
@@ -307,10 +379,11 @@ do not import provider modules, read credentials, or contact services.
 
 ## JSON API
 
-The server binds to `127.0.0.1` by default and sends no CORS permission. JSON request
-bodies are limited to 64 KiB, must be UTF-8 `application/json`, reject duplicate
-keys/non-finite numbers, and use a fixed contract. Receipt text is displayed with DOM
-`textContent`, not HTML, and responses include restrictive browser security headers.
+The server binds only to loopback (`127.0.0.1` by default) and sends no CORS
+permission. JSON request bodies are limited to 64 KiB, must be UTF-8
+`application/json`, reject duplicate keys/non-finite numbers, and use a fixed
+contract. Receipt text is displayed with DOM `textContent`, not HTML, and
+responses include restrictive browser security headers.
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -324,6 +397,13 @@ keys/non-finite numbers, and use a fixed contract. Receipt text is displayed wit
 | `POST` | `/api/v1/judge/outcome-gate` | Run the credential-free 3 → 3 allow/execute, then 3 → 2 block/prevent workflow; body must be `{}`. |
 | `GET` | `/api/v1/platform/capabilities` | Read the validated capability summary, entries, and graph. |
 | `GET` | `/api/v1/gate/decisions/{decision_id}` | Fetch one immutable Action Gate decision. |
+| `GET` | `/api/v1/approvals?limit=100` | List privacy-safe approval proposals and derived states. |
+| `GET` | `/api/v1/approvals/{proposal_id}` | Fetch one exact proposal, decision, and execution state. |
+| `POST` | `/api/v1/approvals` | Create one exact payload-free proposal using the fixed approval envelope. |
+| `POST` | `/api/v1/approvals/{proposal_id}/decision` | Immutably approve or reject a proposal. |
+| `POST` | `/api/v1/judge/approval-center/stage` | Stage the credential-free pending approval proof; body must be `{}`. |
+| `POST` | `/api/v1/judge/approval-center/{proposal_id}/approve` | Approve and resolve the bounded generated local proof; body must be `{}`. |
+| `POST` | `/api/v1/judge/approval-center/{proposal_id}/reject` | Reject the bounded generated local proof; body must be `{}`. |
 
 Example:
 
@@ -338,26 +418,36 @@ created, and the complete verdict/check explanation. An exact retry is idempoten
 and adds an evaluation-history entry. Reusing a receipt ID for different content
 returns HTTP `409`; audit history is never silently rewritten.
 
-The API is intentionally unauthenticated because its default threat boundary is one
-local machine. Binding it to a non-loopback address prints a warning and should be
-done only behind authentication and a trusted reverse proxy.
+The API is intentionally unauthenticated and refuses non-loopback binds. Its
+trust boundary is operating-system/process access to localhost and the local
+SQLite files. `requested_by` and `decided_by` are audit labels supplied by that
+trusted local caller, not cryptographically authenticated identities.
+
+The generic approval API records proposals and human decisions only. It does
+not accept callback code, callback URLs, or an arbitrary execution request.
+Execution in the judge endpoints is limited to their built-in generated local
+workflow.
 
 ## Included Globus agent integration
 
 The public OSS runner in [`server/agent_runner.py`](../server/agent_runner.py)
 uses [`agent_adapter.py`](agent_adapter.py) after it obtains a durable run ID:
 
-1. The runner records an aware UTC start time and calls the real Globus
+1. The runner resolves the named built-in agent's explicit non-empty tool
+   allowlist before any model call; a missing or empty grant fails closed.
+2. The orchestrator advertises only those tool schemas and checks each tool
+   name again before dispatcher invocation.
+3. The runner records an aware UTC start time and calls the real Globus
    orchestrator.
-2. It writes the dated Markdown brief as exact bytes.
-3. The adapter reopens those bytes and verifies both size and SHA-256.
-4. It checks the actual model reply for empty, too-short, refusal-like, and
+4. It writes the dated Markdown brief as exact bytes.
+5. The adapter reopens those bytes and verifies both size and SHA-256.
+6. It checks the actual model reply for empty, too-short, refusal-like, and
    error-like output without copying private reply text into SQLite.
-5. It emits and ingests a member-scoped receipt containing an install-keyed
+7. It emits and ingests a member-scoped receipt containing an install-keyed
    HMAC pseudonym rather than a raw email address.
-6. The MySQL runner row is marked successful only when the Truth verdict is
+8. The MySQL runner row is marked successful only when the Truth verdict is
    trusted.
-7. Compact verdicts appear in the existing Agents dashboard and chat activity
+9. Compact verdicts appear in the existing Agents dashboard and chat activity
    console; receipt payloads never enter those status APIs.
 
 Exceptions after durable run creation produce explicit failed receipts. An artifact whose process
@@ -438,13 +528,15 @@ database server, cloud account, API key, or outbound network access is required.
 
 ## Built during OpenAI Build Week with Codex and GPT-5.6
 
-**Globus Truth Layer, Mission Control, Action Gate, and the public OSS
-AgentRunner integration are the new work built during OpenAI Build Week with
-Codex and GPT-5.6.** The work includes the v1 receipt contract, strict
-evaluator, SQLite receipt and decision audit repositories, local dashboard/API,
-source-backed capability registry, safe fixtures, real artifact verification,
-the credential-free Evidence Lab and business-outcome challenge, visible
-verdict badges, adversarial tests, and this documentation.
+**Globus Truth Layer, Mission Control, Action Gate, Consequence Firewall,
+Approval Center, and the public OSS AgentRunner integration are the new work
+built during OpenAI Build Week with Codex and GPT-5.6.** The work includes the
+v1 receipt contract, strict evaluator, SQLite receipt/decision/approval audit
+repositories, local dashboard/API, source-backed capability registry, exact
+runtime grants for four built-in background agents, safe fixtures, real
+artifact verification, the credential-free Evidence Lab, business-outcome
+challenge, and changed/exact/replay approval proof, visible verdict badges,
+adversarial tests, and this documentation.
 
 The broader Globus platform and its existing agent fleet predate this Build Week
 work. They were not built with Codex or GPT-5.6, and this repository does not claim

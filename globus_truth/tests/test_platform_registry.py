@@ -56,6 +56,24 @@ def _agent_names_from_source() -> list[str]:
     return names
 
 
+def _agent_tool_grants_from_source() -> dict[str, set[str]]:
+    value = _assignment(
+        _module_tree("server/globus_agents_catalog.py"),
+        "GLOBUS_AGENTS_CATALOG",
+    )
+    assert isinstance(value, ast.List)
+    grants: dict[str, set[str]] = {}
+    for item in value.elts:
+        assert isinstance(item, ast.Dict)
+        pairs = {
+            ast.literal_eval(key): field
+            for key, field in zip(item.keys, item.values)
+        }
+        name = ast.literal_eval(pairs["name"])
+        grants[name] = set(ast.literal_eval(pairs["tool_allowlist"]))
+    return grants
+
+
 def _tool_names_from_source() -> list[str]:
     value = _assignment(
         _module_tree("server/globus_tools_schema.py"),
@@ -99,7 +117,7 @@ def _provider_adapters_from_source() -> list[tuple[str, str, str]]:
 class PlatformRegistryTests(unittest.TestCase):
     def test_summary_is_honest_and_explicit_about_setup(self):
         summary = get_platform_summary()
-        self.assertEqual(summary["release"], "0.13.0")
+        self.assertEqual(summary["release"], "0.14.0")
         self.assertEqual(summary["headline"]["built_in_agents"], 4)
         self.assertEqual(summary["headline"]["llm_tools"], 20)
         self.assertEqual(
@@ -137,6 +155,17 @@ class PlatformRegistryTests(unittest.TestCase):
         self.assertEqual(advertised_tools, set(_tool_names_from_source()))
         self.assertEqual(len(advertised_agents), 4)
         self.assertEqual(len(advertised_tools), 20)
+
+    def test_graph_agent_tool_edges_match_enforced_catalog_grants(self):
+        graph = get_platform_graph()
+        actual: dict[str, set[str]] = {}
+        for edge in graph["edges"]:
+            if edge["relation"] != "uses":
+                continue
+            agent = edge["source"].removeprefix("agent.")
+            tool = edge["target"].removeprefix("tool.")
+            actual.setdefault(agent, set()).add(tool)
+        self.assertEqual(actual, _agent_tool_grants_from_source())
 
     def test_provider_inventory_matches_every_plugin_info_in_source(self):
         source_rows = _provider_adapters_from_source()

@@ -228,6 +228,7 @@ class AgentRunnerTruthIntegrationTests(unittest.TestCase):
                 "name": "research",
                 "role": "Research Agent",
                 "task_prompt": "Produce a grounded research brief.",
+                "tool_allowlist": ["search_files"],
             }
         ]
 
@@ -244,6 +245,7 @@ class AgentRunnerTruthIntegrationTests(unittest.TestCase):
             "db_helpers",
             "globus_agents_catalog",
             "globus_orchestrator",
+            "globus_tool_policy",
         )
         self.old_modules = {
             name: sys.modules.get(name) for name in self.module_names
@@ -255,6 +257,14 @@ class AgentRunnerTruthIntegrationTests(unittest.TestCase):
         runner_path = (
             Path(__file__).resolve().parents[2] / "server" / "agent_runner.py"
         )
+        policy_path = runner_path.with_name("globus_tool_policy.py")
+        policy_spec = importlib.util.spec_from_file_location(
+            f"_globus_tool_policy_under_test_{id(self)}", policy_path
+        )
+        assert policy_spec is not None and policy_spec.loader is not None
+        policy = importlib.util.module_from_spec(policy_spec)
+        policy_spec.loader.exec_module(policy)
+        sys.modules["globus_tool_policy"] = policy
         spec = importlib.util.spec_from_file_location(
             f"_agent_runner_under_test_{id(self)}", runner_path
         )
@@ -284,6 +294,12 @@ class AgentRunnerTruthIntegrationTests(unittest.TestCase):
         result = self.runner.run_agent_for_member("research", email)
 
         self.assertTrue(result["ok"])
+        self.send.assert_called_once_with(
+            email,
+            "Produce a grounded research brief.",
+            allowed_tools=frozenset({"search_files"}),
+            agent_name="research",
+        )
         self.assertEqual(
             set(result["truth"]),
             {"storage_id", "verdict", "valid", "reason_codes"},
@@ -446,6 +462,20 @@ class AgentRunnerTruthIntegrationTests(unittest.TestCase):
         self.assertIn("truth database unavailable", result["error"])
         self.send.assert_not_called()
         self.assertEqual(self.fake_db.rows[0]["status"], "error")
+
+    def test_missing_agent_tool_allowlist_fails_closed_before_model_call(
+        self,
+    ) -> None:
+        self.runner.GLOBUS_AGENTS_CATALOG[0].pop("tool_allowlist")
+
+        result = self.runner.run_agent_for_member(
+            "research", "policy@example.test"
+        )
+
+        self.assertFalse(result["ok"])
+        self.assertIn("AgentToolPolicyError", result["error"])
+        self.send.assert_not_called()
+        self.assertEqual(self.fake_db.rows, [])
 
     def test_missing_durable_runner_id_fails_before_model_or_receipt(
         self,

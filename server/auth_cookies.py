@@ -1,10 +1,16 @@
 """Session cookie + token gen/verify for the members area — extracted
 from lead_server.py 2026-06-28 as refactor slice #6b.
 
-Cookie shape: `bws_member=<base64url(email|expires)>.<hex_hmac>` with
+Cookie shape:
+`bws_member=<base64url(v2|email|audience_host|expires)>.<hex_hmac>` with
 HttpOnly, Secure, SameSite=Lax flags, 30-day Max-Age. HMAC is
-SHA-256 of the inner `email|expires` payload (not the base64 wrapper)
+SHA-256 of the inner payload (not the base64 wrapper)
 so the wire format can be inspected without breaking verification.
+
+The exact normalized arrival host is part of the signed payload. A session
+issued by an organization portal therefore cannot be replayed against the
+single-tenant host (or another organization portal). Pre-v2 unbound cookies
+fail closed and require a new sign-in.
 
 SESSION_SECRET + SESSION_TTL are injected at startup via configure()
 so this module has zero deps on lead_server (avoids circular import).
@@ -39,10 +45,26 @@ def configure(*, session_secret, session_ttl=None):
         _SESSION_TTL = int(session_ttl)
 
 
-def verify_token(token):
-    """Return the email if the token is valid + unexpired, else None.
+def _audience(value):
+    """Normalize one already port-stripped HTTP host for token binding."""
+    if not isinstance(value, str):
+        raise ValueError("session audience is required")
+    normalized = value.strip().lower()
+    if (
+        not normalized
+        or len(normalized) > 255
+        or "|" in normalized
+        or any(character.isspace() for character in normalized)
+    ):
+        raise ValueError("invalid session audience")
+    return normalized
+
+
+def verify_token(token, *, audience):
+    """Return the email for a valid, unexpired token for this host, else None.
     Never raises — bad tokens always return None."""
     try:
+        expected_audience = _audience(audience)
         b64, mac = token.split(".", 1)
         pad = "=" * (-len(b64) % 4)
         payload = base64.urlsafe_b64decode(b64 + pad).decode()
@@ -50,7 +72,9 @@ def verify_token(token):
                           hashlib.sha256).hexdigest()
         if not hmac.compare_digest(mac, expect):
             return None
-        email, exp = payload.rsplit("|", 1)
+        version, email, token_audience, exp = payload.split("|")
+        if version != "v2" or not email or token_audience != expected_audience:
+            return None
         if int(exp) < int(time.time()):
             return None
         return email
@@ -58,11 +82,21 @@ def verify_token(token):
         return None
 
 
-def make_cookie(email):
+def make_cookie(email, *, audience):
     """Build the Set-Cookie header value for a successful login.
-    Encodes `email|expires_unix` as base64, signs with SESSION_SECRET,
-    sets HttpOnly + Secure + SameSite=Lax + 30-day Max-Age."""
-    payload = email + "|" + str(int(time.time()) + _SESSION_TTL)
+    Encodes a version, email, exact host audience, and expiry; signs with
+    SESSION_SECRET; and sets HttpOnly + Secure + SameSite=Lax."""
+    if not isinstance(email, str) or not email or "|" in email:
+        raise ValueError("valid session email is required")
+    normalized_audience = _audience(audience)
+    payload = (
+        "v2|"
+        + email
+        + "|"
+        + normalized_audience
+        + "|"
+        + str(int(time.time()) + _SESSION_TTL)
+    )
     mac = hmac.new(_SESSION_SECRET, payload.encode(),
                    hashlib.sha256).hexdigest()
     token = (base64.urlsafe_b64encode(payload.encode())

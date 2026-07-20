@@ -7,7 +7,7 @@ import tempfile
 import threading
 import unittest
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from globus_truth.fixtures import demo_receipts
@@ -52,6 +52,10 @@ class HttpTests(unittest.TestCase):
         connection.close()
         return response.status, response_headers, data
 
+    def test_server_refuses_non_loopback_bind(self) -> None:
+        with self.assertRaisesRegex(ValueError, "local-only"):
+            TruthHTTPServer(("0.0.0.0", 0), self.server.service)
+
     def test_dashboard_and_security_headers(self) -> None:
         status, headers, body = self.request("GET", "/")
         self.assertEqual(status, 200)
@@ -70,6 +74,12 @@ class HttpTests(unittest.TestCase):
         self.assertIn("/api/v1/judge/outcome-gate", decoded)
         self.assertIn("Inspect gate decision", decoded)
         self.assertIn("expected mismatch was not proven", decoded)
+        self.assertIn("Consequence Firewall", decoded)
+        self.assertIn("Agents can ask. Humans decide what leaves.", decoded)
+        self.assertIn("Stage generated approval request", decoded)
+        self.assertIn("Approve this exact action", decoded)
+        self.assertIn("/api/v1/judge/approval-center/stage", decoded)
+        self.assertIn("/api/v1/approvals?limit=100", decoded)
         self.assertEqual(headers["x-frame-options"], "DENY")
         self.assertIn("default-src 'none'", headers["content-security-policy"])
         self.assertNotIn("innerHTML", DASHBOARD_HTML)
@@ -324,6 +334,211 @@ class HttpTests(unittest.TestCase):
             {"error": "outcome gate failed safely"},
         )
         self.assertNotIn(b"private destination path", failed_body)
+
+    def test_approval_center_pauses_then_approves_exactly_once(self) -> None:
+        headers = {"Content-Type": "application/json"}
+        status, _, body = self.request(
+            "POST",
+            "/api/v1/judge/approval-center/stage",
+            "{}",
+            headers,
+        )
+        self.assertEqual(status, 201)
+        pending = json.loads(body)
+        self.assertEqual(pending["status"], "pending")
+        self.assertTrue(pending["credential_free"])
+        self.assertEqual(pending["external_calls"], 0)
+        self.assertEqual(pending["action"]["executions"], 0)
+        self.assertEqual(pending["proposal"]["truth_verdict"], "healthy")
+        self.assertEqual(pending["proposal"]["risk"], "high")
+        self.assertEqual(pending["proposal"]["approval_mode"], "explicit")
+
+        proposal_id = pending["proposal_id"]
+        list_status, _, list_body = self.request(
+            "GET",
+            "/api/v1/approvals?limit=100",
+        )
+        self.assertEqual(list_status, 200)
+        proposals = json.loads(list_body)["proposals"]
+        self.assertTrue(
+            any(
+                item["proposal"]["proposal_id"] == proposal_id
+                and item["state"] == "pending"
+                for item in proposals
+            )
+        )
+
+        resolved_status, _, resolved_body = self.request(
+            "POST",
+            f"/api/v1/judge/approval-center/{proposal_id}/approve",
+            "{}",
+            headers,
+        )
+        self.assertEqual(resolved_status, 200)
+        resolved = json.loads(resolved_body)
+        self.assertTrue(resolved["expectations_met"])
+        self.assertEqual(resolved["status"], "completed")
+        self.assertEqual(resolved["action"]["final_outbox_rows"], 1)
+        attempts = {item["name"]: item for item in resolved["attempts"]}
+        self.assertFalse(attempts["changed_payload"]["executed"])
+        self.assertEqual(
+            attempts["changed_payload"]["reason_codes"],
+            ["approval_scope_mismatch"],
+        )
+        self.assertTrue(attempts["exact_payload"]["executed"])
+        self.assertFalse(attempts["replay"]["executed"])
+        self.assertEqual(
+            attempts["replay"]["reason_codes"],
+            ["approval_already_consumed"],
+        )
+        self.assertEqual(resolved["audit"]["state"], "succeeded")
+
+    def test_general_approval_api_is_strict_payload_free_and_durable(self) -> None:
+        receipt = deepcopy(demo_receipts(NOW)[0])
+        receipt["receipt_id"] = "http-approval-truth-001"
+        stored = self.server.service.ingest(receipt)
+        expires_at = (
+            NOW + timedelta(hours=1)
+        ).isoformat().replace("+00:00", "Z")
+        proposal = {
+            "proposal_id": "http-proposal-001",
+            "storage_id": stored["storage_id"],
+            "action_id": "http-action-001",
+            "policy_id": "healthy_only",
+            "action_kind": "local-outbox",
+            "payload_sha256": "b" * 64,
+            "requested_by": "agent.sales-desk",
+            "risk": "high",
+            "expires_at": expires_at,
+        }
+        headers = {"Content-Type": "application/json"}
+        status, _, body = self.request(
+            "POST",
+            "/api/v1/approvals",
+            json.dumps(proposal),
+            headers,
+        )
+        self.assertEqual(status, 201)
+        created = json.loads(body)
+        self.assertTrue(created["created"])
+        self.assertNotIn("payload", {
+            key: value
+            for key, value in created.items()
+            if key != "payload_sha256"
+        })
+
+        retry_status, _, retry_body = self.request(
+            "POST",
+            "/api/v1/approvals",
+            json.dumps(proposal),
+            headers,
+        )
+        self.assertEqual(retry_status, 200)
+        self.assertFalse(json.loads(retry_body)["created"])
+
+        decision_status, _, decision_body = self.request(
+            "POST",
+            "/api/v1/approvals/http-proposal-001/decision",
+            json.dumps({
+                "outcome": "approved",
+                "decided_by": "operator.http",
+                "reason_code": "reviewed",
+            }),
+            headers,
+        )
+        self.assertEqual(decision_status, 201)
+        self.assertEqual(json.loads(decision_body)["outcome"], "approved")
+
+        get_status, _, get_body = self.request(
+            "GET",
+            "/api/v1/approvals/http-proposal-001",
+        )
+        self.assertEqual(get_status, 200)
+        state = json.loads(get_body)
+        self.assertEqual(state["state"], "approved")
+        self.assertIsNone(state["claim"])
+        self.assertNotIn('"payload":', get_body.decode("utf-8"))
+
+        invalid = {**proposal, "raw_payload": "must-not-enter-audit"}
+        invalid_status, _, _ = self.request(
+            "POST",
+            "/api/v1/approvals",
+            json.dumps(invalid),
+            headers,
+        )
+        self.assertEqual(invalid_status, 400)
+        self.assertEqual(
+            self.request("GET", "/api/v1/approvals/missing-proposal")[0],
+            404,
+        )
+
+    def test_approval_center_rejection_and_http_fail_closed_contract(self) -> None:
+        headers = {"Content-Type": "application/json"}
+        stage_status, _, stage_body = self.request(
+            "POST",
+            "/api/v1/judge/approval-center/stage",
+            "{}",
+            headers,
+        )
+        self.assertEqual(stage_status, 201)
+        proposal_id = json.loads(stage_body)["proposal_id"]
+        reject_status, _, reject_body = self.request(
+            "POST",
+            f"/api/v1/judge/approval-center/{proposal_id}/reject",
+            "{}",
+            headers,
+        )
+        self.assertEqual(reject_status, 200)
+        rejected = json.loads(reject_body)
+        self.assertTrue(rejected["expectations_met"])
+        self.assertEqual(rejected["status"], "rejected")
+        self.assertEqual(rejected["action"]["final_outbox_rows"], 0)
+        self.assertEqual(rejected["attempts"], [])
+
+        for path in (
+            "/api/v1/judge/approval-center/stage",
+            f"/api/v1/judge/approval-center/{proposal_id}/approve",
+        ):
+            invalid_status, _, invalid_body = self.request(
+                "POST",
+                path,
+                '{"unexpected":true}',
+                headers,
+            )
+            self.assertEqual(invalid_status, 400)
+            self.assertIn("accepts only", json.loads(invalid_body)["error"])
+        self.assertEqual(
+            self.request(
+                "POST",
+                "/api/v1/judge/approval-center/bad%2Fid/approve",
+                "{}",
+                headers,
+            )[0],
+            400,
+        )
+        self.assertEqual(self.request("GET", "/api/v1/approvals?limit=0")[0], 400)
+
+        original = self.server.service.stage_approval_challenge
+
+        def fail_with_private_detail() -> dict:
+            raise RuntimeError("password=private-provider-secret")
+
+        self.server.service.stage_approval_challenge = fail_with_private_detail
+        try:
+            failed_status, _, failed_body = self.request(
+                "POST",
+                "/api/v1/judge/approval-center/stage",
+                "{}",
+                headers,
+            )
+        finally:
+            self.server.service.stage_approval_challenge = original
+        self.assertEqual(failed_status, 500)
+        self.assertEqual(
+            json.loads(failed_body),
+            {"error": "approval challenge failed safely"},
+        )
+        self.assertNotIn(b"private-provider-secret", failed_body)
 
     def test_changed_retry_returns_conflict(self) -> None:
         receipt = deepcopy(demo_receipts(NOW)[0])

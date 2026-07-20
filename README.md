@@ -51,16 +51,24 @@ without your sign-off.
 ![Globus Mission Control](docs/assets/globus-mission-control.png)
 
 [`globus_truth/`](globus_truth/) is a self-contained reliability and control
-layer for the agent fleet. In v0.13 its localhost dashboard becomes **Mission
-Control**: a source-backed capability inventory, the existing Evidence Lab,
-and a fail-closed Action Gate that can prevent a consequential step when
-destination evidence contradicts an agent's claim.
+layer for the agent fleet. v0.14 adds a **Consequence Firewall** to Mission
+Control: four built-in background agents now receive exact, deny-by-default
+tool grants. The orchestrator shows each agent only its granted tool schemas
+and rechecks every requested tool at dispatch, so a forged tool name cannot
+reach the dispatcher. These grants cover the four shipped agents, not every
+capability in the platform inventory.
 
 The versioned v1 receipt contract supplies the foundation. Agents emit measured
 counts, timestamps, checks, heartbeats, and evidence references. A deterministic
 evaluator returns one of five explainable verdicts: healthy, verified no-work,
 contradictory, failed, or stale. Receipts, verdict history, and immutable action
 decisions stay in local SQLite.
+
+The new Approval Center pauses an exact high-risk proposal for a person to
+approve or reject. It stores IDs, policy metadata, timestamps, and SHA-256
+bindings—not the action payload. Human consent is necessary but never enough:
+execution still requires a fresh Truth verdict, an exact proposal hash, and a
+unique execution claim immediately before the bounded callback.
 
 Run the complete de-identified demo with no setup beyond Python 3.10+:
 
@@ -70,18 +78,40 @@ python -m globus_truth
 
 Open <http://127.0.0.1:8765>. The component has no third-party dependencies and
 does not call an external service. Its [README](globus_truth/README.md)
-documents the receipt contract, Action Gate policies, API, CLI, integration
-path, supported platforms, limitations, and test command.
+documents the receipt contract, Consequence Firewall, Approval Center, Action
+Gate policies, API, CLI, integration path, supported platforms, limitations,
+and test command.
 
-For the fastest v0.13 judge path, click **Run verified business workflow**.
-Globus creates three de-identified follow-up rows in a separate local SQLite
-destination, reopens that destination through an independent connection,
-canonicalizes the observed rows, and hashes them. The 3 claimed → 3 observed
-receipt is healthy, so the `healthy_only` policy authorizes exactly one bounded
-local outbox insert. Globus then deletes exactly one generated row and repeats
-the read-back. The 3 claimed → 2 observed receipt is contradictory, the gate
-blocks, and the second action callback is never invoked. The challenge needs
-no LLM, MySQL, provider account, credential, Docker runtime, or external call.
+For the fastest v0.14 judge path, click **Stage generated approval request**.
+The credential-free demo stages one generated high-risk local action and proves
+that nothing executes before the click. After approval it first tries a changed
+payload, which is blocked; then it executes the exact payload once after a
+fresh Truth check; finally it replays the exact request, which is blocked by the
+already-consumed claim. The independent local outbox ends with exactly one row.
+No action payload is stored in the Approval Center.
+
+<p align="center">
+  <a href="docs/assets/globus-consequence-firewall-pending.png"><img src="docs/assets/globus-consequence-firewall-pending.png" width="49%" alt="Globus Approval Center paused for exact human review"></a>
+  <a href="docs/assets/globus-consequence-firewall-proof.png"><img src="docs/assets/globus-consequence-firewall-proof.png" width="49%" alt="Globus Consequence Firewall changed, exact, and replay proof"></a>
+</p>
+
+This is an at-most-once guarantee inside the local SQLite coordinator. External
+exactly-once effects require provider idempotency keys and reconciliation. The
+generic API and CLI can create, inspect, approve, and reject exact proposals;
+they deliberately do not accept or dispatch arbitrary callbacks. Only the
+bounded built-in judge workflow performs the generated local callback.
+
+The v0.13 **Run verified business workflow** remains available. It creates
+three de-identified follow-up rows in a separate local SQLite destination,
+reopens that destination through an independent connection, canonicalizes the
+observed rows, and hashes them. The 3 claimed → 3 observed receipt is healthy,
+so the `healthy_only` policy authorizes exactly one bounded local outbox insert.
+Globus then deletes exactly one generated row and repeats the read-back. The
+3 claimed → 2 observed receipt is contradictory, the gate blocks, and the
+second action callback is never invoked.
+
+Both judge workflows need no LLM, MySQL, provider account, credential, Docker
+runtime, or external call.
 
 ![Globus verified Outcome Gate report](docs/assets/globus-outcome-gate.png)
 
@@ -111,13 +141,17 @@ flowchart LR
     B --> C[Versioned receipt]
     C --> D[Deterministic evaluator]
     D --> E[Immutable history]
-    D --> F[Fail-closed Action Gate]
-    F -->|trusted policy| G[Bounded action]
-    F -->|failed / contradictory / stale| H[Blocked + audited]
+    D --> F[Exact approval request]
+    F --> G[Human decision]
+    G --> H[Fresh Truth recheck]
+    H --> I[Unique local execution claim]
+    I -->|exact + trusted| J[Bounded action]
+    H -->|failed / contradictory / stale| K[Blocked + audited]
+    I -->|changed or replayed| K
 ```
 
-Run the complete hermetic repository check—including 93 Truth/Mission Control
-tests, the real-runner adapter, UI rendering, broader workflow invariants, and
+Run the complete hermetic repository check—including the Truth/Mission Control
+suite, real-runner adapter, UI rendering, broader workflow invariants, and
 public asset smoke tests—with:
 
 ```bash
@@ -129,12 +163,13 @@ and GPT-5.6 contribution, a reel script, a longer YouTube script, screen cues,
 and accuracy guardrails—read
 [**The Globus Truth Layer build story**](docs/TRUTH_LAYER_BUILD_STORY.md).
 
-**Scope disclosure:** Globus Truth Layer, Mission Control, Action Gate, and the
-public OSS AgentRunner integration are the new work built during OpenAI Build
-Week with Codex and GPT-5.6. The broader Claude-native Globus platform and its
-existing agent fleet predate Build Week; this repository does not claim they
-were built with Codex or GPT-5.6. The capability registry is an inventory, not
-a claim of OpenClaw parity or live-connected provider accounts.
+**Scope disclosure:** Globus Truth Layer, Mission Control, Action Gate,
+Consequence Firewall, Approval Center, and the public OSS AgentRunner
+integration are the new work built during OpenAI Build Week with Codex and
+GPT-5.6. The broader Claude-native Globus platform and its existing agent fleet
+predate Build Week; this repository does not claim they were built with Codex
+or GPT-5.6. The capability registry is an inventory, not a claim that all 71
+entries are governed, connected, live, or at OpenClaw parity.
 
 ## The brain
 
@@ -219,11 +254,11 @@ Globus is opinionated. Bring your own:
 | **Agents catalog** | `server/globus_agents_catalog.py` | The reference impl ships 4 generic agents: Research, Sales Desk, Narada, and Infra Watch. Replace or extend them for your workflows. The buildwithsumit production catalog (Mahabharata names: Drona, Vyas, Sanjay, Kripa, etc.) is intentionally NOT shipped—it is branded for Sumit's team. |
 | **Capabilities block** | `server/globus_chat_helpers.py::_globus_capabilities_block` | The "what Globus IS / what it can do / what it CANNOT do" injected into every system prompt. Edit to match your install's data sources and policies. |
 | **Members area chrome** | `server/html_chrome.py` + `members/body.html` | Default styling. Replace if you want a different theme. |
-| **Authentication** | `server/members_auth_html.py` + `server/auth_cookies.py` | Default is email-OTP + Google OAuth. Plug in SSO / SAML / whatever via the same `is_active_member(email)` gate. |
+| **Authentication** | `server/members_auth_html.py` + `server/auth_cookies.py` | Default is email-OTP + Google OAuth with host-bound HMAC sessions. Plug in SSO / SAML / whatever via the same `is_active_member(email)` gate. |
 
 ## Status
 
-- **v0.13 (current)** — text + voice chat, vault from any combo of
+- **v0.14 (current)** — text + voice chat, vault from any combo of
   Obsidian zip / Google Drive / Gmail / WhatsApp Web / Microsoft Teams
   (the last two via a Chrome extension bridge), **plus a working agents
   subsystem**: 4 built-in agents (Research, Sales Desk, Narada, and Infra Watch)
@@ -231,10 +266,14 @@ Globus is opinionated. Bring your own:
   ("run research"), the dashboard at `/members/globus/agents`, or
   cron via `scripts/run_agent.py`. Each brief lands as a per-member
   file on disk + a row in `globus_agent_runs`. A deployable public
-  Telegram ingestion daemon is still ahead. Mission Control adds an honest,
-  source-backed capability registry, immutable Action Gate decisions, and a
-  credential-free verified-outcome challenge alongside the original one-byte
-  Evidence Lab—see [ROADMAP.md](ROADMAP.md).
+  Telegram ingestion daemon is still ahead. Mission Control now adds exact
+  runtime tool grants for those four agents plus the payload-free Approval
+  Center and its credential-free changed/exact/replay proof. The v0.13
+  source-backed registry, immutable Action Gate, verified-outcome challenge,
+  and original one-byte Evidence Lab remain available—see
+  [ROADMAP.md](ROADMAP.md).
+  v0.14 session cookies are bound to their issuing host; upgrading signs out
+  pre-v0.14 sessions once instead of accepting an unbound cookie.
 - **Alpha** — works in production at buildwithsumit.com but every
   install will need hands-on setup. No managed-installer yet.
 - **Roadmap** is in [ROADMAP.md](ROADMAP.md). Voice cost/latency rebuild
