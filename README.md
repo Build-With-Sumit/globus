@@ -68,6 +68,11 @@ does not call an external service. Its [README](globus_truth/README.md) document
 the receipt contract, API, integration path, supported platforms, limitations,
 and test command.
 
+For a camera-friendly explanation of what we built—including the exact Codex
+and GPT-5.6 contribution, a 60-second reel script, a longer YouTube script,
+screen cues, and accuracy guardrails—read
+[**The Globus Truth Layer build story**](docs/TRUTH_LAYER_BUILD_STORY.md).
+
 **Scope disclosure:** Globus Truth Layer is the new component built during
 OpenAI Build Week with Codex and GPT-5.6. The broader Claude-native Globus
 platform and its existing agent fleet predate Build Week; this repository does
