@@ -7,7 +7,7 @@ Shipped:
 - ✅ 26 server modules extracted from the buildwithsumit reference
   implementation (chrome, page builders, LLM dispatcher, DB layer,
   agents subsystem, voice helpers).
-- ✅ Full MySQL schema (`schema/globus_schema.sql`) — 18 tables, all
+- ✅ Full MySQL schema (`schema/globus_schema.sql`) — 35 tables, all
   per-member-isolated.
 - ✅ Config templates (`.env.example`, `persona.example.md`).
 - ✅ Generic example agents catalog (`globus_agents_catalog.py` ships
@@ -17,7 +17,7 @@ Shipped:
 - ✅ Architecture docs (`ARCHITECTURE.md`) — module map, data flow,
   refactor history.
 
-## v0.2 (current) — fully working text chat
+## v0.2 — fully working text chat
 
 Shipped:
 
@@ -58,7 +58,7 @@ What's intentionally NOT in v0.2:
 - Voice (ElevenLabs custom-LLM endpoint is v0.4)
 - Agents subsystem (v0.5)
 
-## v0.3a (current) — Google Drive vault
+## v0.3a — Google Drive vault
 
 Shipped:
 
@@ -94,7 +94,7 @@ Shipped:
   `updated_at` + UNIQUE KEY on (email, source_type, external_id),
   new `globus_sync_runs` history table.
 
-## v0.3b (current) — Gmail vault
+## v0.3b — Gmail vault
 
 Shipped:
 
@@ -129,7 +129,7 @@ Shipped:
   `TypeError: sequence item 0: expected str instance, NoneType found`
   when a vault row had `provider_account=NULL`. Now skips those rows.
 
-## v0.3c (current, partial) — Telegram / WhatsApp / Teams bridges
+## v0.3c (partial) — Telegram / WhatsApp / Teams bridges
 
 Shipped:
 
@@ -155,16 +155,16 @@ Outstanding:
   repo (per the existing connectors_html setup page). One extension,
   two scrapers (WA Web + teams.live.com). Sumit's reference
   implementation is the upstream — fork + customise UI as needed.
-- [ ] **Telegram (Telethon daemon)** — lives in
-  [Build-With-Sumit/telegram-bridge](https://github.com/Build-With-Sumit/telegram-bridge).
-  The Globus server's read path (`search_telegram` tool) is already
-  shipped; you just need the daemon writing into `globus_telegram_messages`.
+- [ ] **Telegram (Telethon daemon)** — the public bridge repository is not yet
+  published. The Globus server's read path (`search_telegram` tool) is already
+  shipped; a deployment still needs a daemon writing into
+  `globus_telegram_messages`.
 - [ ] **Microsoft Teams via Graph API** (server-side OAuth + cron sync) —
   alternative to the Chrome-extension Teams ingest. Mirrors the
   Drive/Gmail OAuth shape. ~400 lines if you want it; the extension
   path is the lighter-weight option.
 
-## v0.4 (current) — voice
+## v0.4 — voice
 
 Shipped:
 
@@ -196,7 +196,7 @@ What's intentionally NOT in v0.4 OSS:
   provider switching via `GLOBUS_LLM_PROVIDER` — no separate voice
   routing needed.
 
-## v0.5 (current) — agents
+## v0.5 — agents
 
 Shipped:
 
@@ -234,7 +234,7 @@ fleet with `/opt/hermes/bin/run-agent.sh`). The OSS-native runner is
 the default; wire the Hermes adapter into the route handler if you
 prefer that execution model.
 
-## v0.6 (current) — Narada, the Outbound Agent
+## v0.6 — Narada, the Outbound Agent
 
 Globus's first marketer-facing product feature. End-to-end cold-
 outreach platform with a plugin architecture — any tool in the 12
@@ -370,7 +370,7 @@ Landed:
     private by default and who can change that. The home page hides the
     Agents link entirely until something is shared.
 
-## v0.8 (current) — Email intelligence
+## v0.8 — Email intelligence
 
 Two cron'd passes over a connected Gmail mailbox, plus a daily roll-up.
 An inbox produces far more mail than anyone can read, but only a little of
@@ -417,7 +417,7 @@ Next:
 - Optional archiving as a separate, explicitly opted-in capability — never a
   side effect of a taxonomy bucket.
 
-## v0.9 (current) — Sales desk
+## v0.9 — Sales desk
 
 A daily ranked call list, a short priorities brief, and a pipeline hygiene
 report — pushed into chat rather than a dashboard nobody opens. **Read-only:
@@ -464,7 +464,7 @@ read, so the built-in source reads this install's own outbound pipeline
 instead. Adding a per-vendor read (pagination, field hydration, rate limits) is
 real work and is left as a documented seam rather than faked.
 
-## v0.10 (current) — Opportunity tracker
+## v0.10 — Opportunity tracker
 
 Any pursuit you send into the world and then lose track of: job applications,
 partnership pitches, grant or CFP submissions, sponsorship asks. You send
@@ -511,12 +511,40 @@ without a human reading them is not a thing this project should hand out. What
 generalises — and what's here — is the record-keeping and the reply
 classification.
 
+## v0.11 (current) — Agent Truth Layer
+
+The public AgentRunner now separates verified work from process completion
+instead of equating a successful model call with successful work.
+
+- ✅ **Evidence-backed receipts.** The runner reads the persisted artifact back
+  from disk, checks its exact byte count and SHA-256 digest, and records a
+  versioned receipt without storing the private response body.
+- ✅ **Fail-closed completion.** Empty/refusal-like output, or an artifact that
+  is missing or mismatched during post-write read-back, cannot be marked
+  successful in the run ledger.
+- ✅ **Deterministic verdicts.** Each receipt becomes `healthy`,
+  `verified_no_work`, `degraded_contradictory`, `failed`, or `stale`, with
+  stable reason codes.
+- ✅ **Automatic aging.** A once-healthy run becomes stale after its declared
+  freshness deadline, including in summary and history reads.
+- ✅ **Member isolation.** Receipt IDs are deterministic per durable run while
+  the Truth receipt/SQLite identity uses only an install-keyed HMAC pseudonym;
+  status reads are scoped to that member and run. The operational MySQL ledger
+  remains member-email scoped.
+- ✅ **Operator-visible status.** Agent and chat dashboards display compact
+  Truth badges and reason-code tooltips beside the runner state.
+- ✅ **Judge-ready verification.** `python scripts/test_all.py` runs every
+  repository check in isolation; the Truth Layer itself has 55 hermetic tests.
+- 📄 See [`globus_truth/README.md`](globus_truth/README.md) and
+  [`docs/TRUTH_LAYER_BUILD_STORY.md`](docs/TRUTH_LAYER_BUILD_STORY.md).
+
 ## v1.0 — production-ready
 
 Shipped:
 
-- ✅ **Docker compose** (v1.0a) — `docker compose up` gets you a
-  working Globus + MySQL in one command. Single-stage
+- ✅ **Docker compose** (v1.0a) — `docker compose up` boots the Globus UI
+  and MySQL in one command; LLM-backed chat/agents require a configured
+  provider credential. Single-stage
   `python:3.12-slim` image, non-root user, named volumes for state,
   healthchecks, entrypoint handles wait-for-db + idempotent schema
   apply + SESSION_SECRET bootstrap + optional first-member seed.

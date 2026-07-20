@@ -14,6 +14,46 @@ import os
 from html_chrome import _members_shell, esc
 
 
+_TRUTH_LABELS = {
+    "healthy": "Healthy",
+    "verified_no_work": "Verified no work",
+    "degraded_contradictory": "Contradictory",
+    "failed": "Failed",
+    "stale": "Stale",
+}
+
+_TRUTH_COLORS = {
+    "healthy": ("#e8f7ed", "#146c2e"),
+    "verified_no_work": ("#e8f4ff", "#075985"),
+    "degraded_contradictory": ("#fff4db", "#8a4b08"),
+    "failed": ("#feecec", "#a11a1a"),
+    "stale": ("#f1efff", "#5b3aa4"),
+}
+
+
+def _truth_badge(truth):
+    """Render one compact, explainable Truth Layer verdict."""
+    if not isinstance(truth, dict) or not truth.get("verdict"):
+        return (
+            '<span class="muted small" title="No Truth Layer receipt '
+            'was recorded for this run">not verified</span>'
+        )
+    verdict = str(truth["verdict"])
+    label = _TRUTH_LABELS.get(verdict, verdict.replace("_", " ").title())
+    background, color = _TRUTH_COLORS.get(verdict, ("#f3f4f6", "#374151"))
+    reasons = truth.get("reason_codes") or []
+    explanation = ", ".join(str(reason) for reason in reasons)
+    title = f"Truth Layer: {label}"
+    if explanation:
+        title += f" — {explanation}"
+    return (
+        f'<span title="{esc(title)}" style="display:inline-block;'
+        f'padding:.16rem .48rem;border-radius:999px;white-space:nowrap;'
+        f'font-size:.75rem;font-weight:650;background:{background};'
+        f'color:{color}">{esc(label)}</span>'
+    )
+
+
 def agents_dashboard_html(email, catalog, status):
     """Render the dashboard: catalog cards + running/recent runs.
 
@@ -50,13 +90,15 @@ def agents_dashboard_html(email, catalog, status):
             f'<td>{esc(str(r.get("ts") or ""))}</td>'
             f'<td><span class="pill pill-{("done" if r["status"]=="ok" else "new")}">'
             f'{esc(r["status"])}</span></td>'
+            f'<td>{_truth_badge(r.get("truth"))}</td>'
             f'<td class="muted small">{int(r.get("bytes") or 0):,} bytes</td>'
             f'</tr>'
             for r in recent)
         recent_html = (
             '<table class="table" style="width:100%;font-size:.92rem">'
             '<thead><tr><th>Agent</th><th>Finished</th>'
-            '<th>Status</th><th>Brief size</th></tr></thead>'
+            '<th>Runner</th><th>Truth Layer</th><th>Brief size</th>'
+            '</tr></thead>'
             f'<tbody>{recent_rows}</tbody></table>')
     else:
         recent_html = ('<p class="muted small">No agent runs yet. '
@@ -78,7 +120,9 @@ def agents_dashboard_html(email, catalog, status):
         if latest_for:
             latest_chip = (
                 '<span class="pill pill-done" style="margin-left:.4rem">'
-                f'last brief {esc(str(latest_for.get("ts") or ""))}</span>')
+                f'last brief {esc(str(latest_for.get("ts") or ""))}</span>'
+                f'<span style="margin-left:.35rem">'
+                f'{_truth_badge(latest_for.get("truth"))}</span>')
         else:
             latest_chip = ('<span class="pill pill-soon" '
                            'style="margin-left:.4rem">never run</span>')
@@ -116,7 +160,8 @@ def agents_dashboard_html(email, catalog, status):
         '<span class="eyebrow">Globus &middot; Agents</span>'
         f'<h1>Agents</h1>'
         f'<p class="lead">Long-running tasks that read your vault and '
-        f'produce dated markdown briefs.</p>'
+        f'produce dated markdown briefs. A run earns a trusted Truth Layer '
+        f'verdict only from persisted, measured evidence.</p>'
         '<div class="panel">'
         '<h3 style="margin-top:0">Running now</h3>'
         f'{running_rows}'

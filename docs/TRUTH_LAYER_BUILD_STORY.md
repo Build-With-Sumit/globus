@@ -18,7 +18,7 @@ accurately on camera.
 Globus already existed as a self-hosted private business AI platform with
 cited chat, voice, connected data, and agents. For OpenAI Build Week, we used
 Codex with GPT-5.6 to add a new self-contained component called the **Globus
-Truth Layer**.
+Truth Layer**, then wired it end to end into the public OSS agent runner.
 
 ## Important naming
 
@@ -137,7 +137,10 @@ The module stores receipts and verdicts in a local SQLite database:
 - Receipts are immutable by ID.
 - Retrying the exact same receipt is idempotent.
 - Reusing an existing receipt ID with different content is rejected.
-- Every reevaluation is preserved in verdict history.
+- Explicit ingests and verdict transitions are preserved in verdict history.
+- Trusted stored receipts automatically age into stale verdicts when read after
+  their freshness deadline.
+- Polling records a new history row only when the verdict actually changes.
 - Queries use parameterized SQL.
 - The database uses WAL mode for file-backed operation.
 
@@ -165,7 +168,7 @@ loading fixtures.
 The API supports:
 
 - Fleet summary totals.
-- Paginated receipt and verdict history.
+- Paginated receipts with their latest verdict.
 - Fetching one receipt.
 - Ingesting a receipt.
 - Previewing the safe scenarios.
@@ -196,7 +199,27 @@ The dashboard shows:
 - An ingest form for testing a receipt.
 - One-click loading of the five safe scenarios.
 
-### 8. Five safe demonstration scenarios
+### 8. A real Globus agent-runner bridge
+
+Every public OSS `AgentRunner` run that obtains a durable ledger ID follows the
+complete verification path:
+
+1. Globus records the start time and calls the real vault-aware orchestrator.
+2. The runner writes the generated Markdown brief as exact bytes.
+3. The adapter reopens the artifact and verifies its byte count and SHA-256.
+4. It checks the actual model reply for empty, too-short, refusal-like, and
+   error-like output without copying that private reply into the Truth database.
+5. It emits a receipt identified by an install-keyed HMAC member pseudonym.
+6. The deterministic evaluator returns and persists the verdict.
+7. The existing Agents dashboard and chat activity console show that verdict
+   separately from the process runner’s status.
+
+If the model call throws, Globus emits an explicit failed receipt. If the
+process completed but its output or artifact checks fail, the run becomes
+contradictory. If receipt persistence itself fails, the runner fails closed
+instead of showing an unverified green state.
+
+### 9. Five safe demonstration scenarios
 
 The fixtures cover:
 
@@ -208,19 +231,27 @@ The fixtures cover:
 
 They are de-identified, freshly timestamped, and require no credentials.
 
-### 9. Thirty-eight automated tests
+### 10. Automated tests
 
-The current suite has 38 passing tests:
+The Truth Layer suite has 55 passing tests:
 
 - 18 evaluator tests.
 - 10 HTTP and dashboard tests.
-- 8 storage tests.
+- 14 storage and automatic-aging tests.
 - 2 command-line tests.
+- 11 real AgentRunner adapter and isolation tests.
 
 They test malformed receipts, impossible counts, future timestamps, stale
 heartbeats, missing evidence, failed checks, refusal text, strict JSON,
 security headers, SQL metacharacters, immutable receipt IDs, idempotent retries,
-pagination, and the complete five-verdict demo.
+pagination, automatic persisted-receipt aging, artifact read-back and hashes,
+tenant-isolated status lookup, atomic concurrent stale transitions, large-fleet
+summaries, failed ledger commits, non-overwriting evidence files, persistence
+failures, and the complete five-verdict demo.
+
+The repository-level command also runs the wider Globus behavioural checks,
+visible-verdict rendering tests, public-asset smoke tests, and Python
+compilation in isolated processes.
 
 ## What Codex with GPT-5.6 contributed
 
@@ -235,11 +266,14 @@ Codex with GPT-5.6 helped translate those lessons into:
 - Explicit reason codes.
 - The Python evaluator.
 - SQLite storage and audit behavior.
+- Automatic persisted-receipt aging.
 - The service and command-line interface.
 - The JSON API.
 - The responsive dashboard.
+- The real OSS AgentRunner adapter and visible verdict integration.
 - Safe fixtures.
 - Adversarial tests.
+- A single hermetic repository test command and CI workflow.
 - Documentation and the judge quick-start path.
 
 The broader Globus platform and its Claude-native runtime predate Build Week.
@@ -266,8 +300,9 @@ They should not be represented as having been built with Codex or GPT-5.6.
 > The outcome is one of five explainable verdicts: healthy, verified no-work,
 > contradictory, failed, or stale.
 >
-> We also built immutable SQLite history, a JSON API, a dashboard, safe demo
-> fixtures, and 38 automated tests.
+> Once the public Globus runner has a durable run ID, it writes the brief, reads
+> it back, verifies its SHA-256, and stores the receipt before the ledger can
+> become green. Identity or receipt-persistence failures fail closed.
 >
 > It is not another AI judging an AI. It is a deterministic reliability
 > contract for AI agents.
@@ -275,12 +310,13 @@ They should not be represented as having been built with Codex or GPT-5.6.
 ### Reel screen cues
 
 1. Open on camera: “An agent saying done is making a claim.”
-2. Show the Globus Agents screen.
-3. Cut to one receipt in JSON.
-4. Show the five verdict badges.
-5. Open one contradictory run and show its failed checks.
-6. Show `38 tests ... OK` in the terminal.
-7. Close on camera with the final reliability-contract line.
+2. Run one real public Globus agent.
+3. Show its brief, SHA-256 evidence, and Truth Layer badge.
+4. Cut to one receipt in JSON.
+5. Show the five verdict badges.
+6. Open one contradictory run and show its failed checks.
+7. Show the complete test suite passing in the terminal.
+8. Close on camera with the final reliability-contract line.
 
 <!-- pagebreak -->
 
@@ -373,7 +409,8 @@ failed check and the evaluator’s reason code.
 > idempotent, while reusing a receipt ID with different content creates a
 > conflict instead of silently rewriting history.
 >
-> Every reevaluation is kept in a verdict history.
+> Explicit ingests and verdict transitions are kept in verdict history;
+> unchanged polling does not manufacture duplicate audit events.
 >
 > We also built a local JSON API and a responsive dashboard where an operator
 > can inspect fleet totals, open a receipt, and understand exactly why the
@@ -381,6 +418,27 @@ failed check and the evaluator’s reason code.
 
 **Screen cue:** Show the dashboard detail panel, then briefly show an API JSON
 response.
+
+### The live Globus integration
+
+> The submitted public runner uses this contract after durable run creation.
+>
+> After the orchestrator returns, the runner writes the Markdown brief as exact
+> bytes. The adapter reopens the file, checks its size and SHA-256, and scans
+> the actual reply for empty or refusal-like output without copying the private
+> reply into the Truth database.
+>
+> It then stores an install-scoped member receipt and returns a compact verdict to the
+> existing Agents dashboard and chat activity console.
+>
+> A process can therefore complete while its output is still marked
+> contradictory. The MySQL runner status and the Truth Layer verdict are
+> deliberately separate. If the Truth receipt cannot be stored, the run fails
+> closed rather than appearing green.
+
+**Screen cue:** Run the public research agent, then show the new badge in both
+the Agents dashboard and chat activity console. Open the matching receipt and
+show the artifact hash check.
 
 ### How Codex and GPT-5.6 were used
 
@@ -396,20 +454,23 @@ response.
 > heartbeats, changed retries, and fluent refusal text masquerading as
 > successful output.
 >
-> The final suite contains 38 tests covering the evaluator, storage,
-> command-line interface, and HTTP surface.
+> The final suite covers the evaluator, storage, automatic aging,
+> command-line interface, HTTP surface, real runner adapter, member isolation,
+> and visible verdict rendering.
 
 **Screen cue:** Show the relevant Codex session, then run the test command and
-end on `Ran 38 tests ... OK`.
+end on the complete passing summary.
 
 ### Honest scope
 
 > The broader Globus platform existed before Build Week and remains
 > Claude-native at runtime.
 >
-> The new Build Week work is the Truth Layer itself. In the submitted version,
-> it is a self-contained, integration-ready component; I am not claiming that
-> every production Globus agent already emits these receipts.
+> The new Build Week work is the Truth Layer and its public OSS runner
+> integration. In the included runner, an `ok` ledger state requires a trusted
+> persisted receipt; failures before receipt creation remain explicitly
+> non-green. I am not claiming that every private production workflow already
+> uses the same adapter.
 >
 > It also is not a universal oracle that independently proves every external
 > event. It verifies the receipt’s structure, measurements, timing, declared
@@ -439,10 +500,10 @@ credible when spoken directly.
 6. Contradictory receipt with failed count or evidence checks.
 7. Failure receipt with explicit error detail.
 8. Stale receipt and freshness check.
-9. SQLite receipt and verdict history, shown through the dashboard.
+9. SQLite receipt records and latest verdicts, shown through the dashboard.
 10. JSON API response.
 11. Codex/GPT-5.6 build session.
-12. Terminal running all 38 tests.
+12. Terminal running the complete test suite.
 13. Public repository and one-command quick start.
 
 ## Accuracy guide
@@ -455,8 +516,11 @@ credible when spoken directly.
 - “A successful run requires measured work and evidence.”
 - “The module has five explainable verdicts.”
 - “The safe demo has no third-party packages, credentials, or outbound calls.”
-- “All 38 Truth Layer tests pass.”
-- “The module is integration-ready.”
+- “The full hermetic test command passes.”
+- “The public OSS AgentRunner cannot mark a run `ok` without a trusted,
+  persisted Truth receipt.”
+- “The existing Globus agent UI shows runner status and Truth verdict
+  separately.”
 
 ### Statements to avoid
 
@@ -464,7 +528,7 @@ credible when spoken directly.
 - “Codex built the entire Globus platform.”
 - “The Truth Layer proves every external event happened.”
 - “It independently verifies every evidence reference.”
-- “Every production Globus agent already emits receipts.”
+- “Every private production Globus workflow already emits receipts.”
 - “It eliminates hallucinations.”
 - “It is a trained truth model.”
 
@@ -479,8 +543,7 @@ python -m globus_truth
 Run the tests:
 
 ```bash
-python -m compileall -q globus_truth
-python -m unittest discover -s globus_truth/tests -v
+python scripts/test_all.py
 ```
 
 Evaluate one receipt without storing it:

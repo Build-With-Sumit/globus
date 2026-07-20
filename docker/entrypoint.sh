@@ -48,9 +48,9 @@ for i in $(seq 1 60); do
 done
 
 # ─────────────────────────────────────────────────────────────────────
-# 2. Apply schema (idempotent — all statements are CREATE/ALTER IF
-#    NOT EXISTS). We re-run it on every boot so schema bumps in
-#    git pulls land automatically.
+# 2. Apply the idempotent bootstrap schema. New installations receive the
+#    current schema; existing-install column migrations still require an
+#    explicit migration until the planned migration framework lands.
 # ─────────────────────────────────────────────────────────────────────
 
 if [ -f /app/schema/globus_schema.sql ]; then

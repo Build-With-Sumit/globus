@@ -14,6 +14,30 @@ def _iso(value: datetime) -> str:
     return value.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
+def _sortable_iso(value: datetime) -> str:
+    return (
+        value.astimezone(timezone.utc)
+        .isoformat(timespec="microseconds")
+        .replace("+00:00", "Z")
+    )
+
+
+def _parse_iso(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    text = value[:-1] + "+00:00" if value.endswith("Z") else value
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    try:
+        return parsed.astimezone(timezone.utc)
+    except (OverflowError, ValueError):
+        return None
+
+
 class TruthService:
     def __init__(
         self,
@@ -25,9 +49,47 @@ class TruthService:
         self.repository = repository
         self.stale_after = stale_after
         self._clock = clock or (lambda: datetime.now(timezone.utc))
+        self.repository.configure_stale_reevaluation(
+            clock=lambda: _sortable_iso(self._now()),
+            reevaluator=self._reevaluate_stored,
+        )
+
+    def _now(self) -> datetime:
+        return self._clock().astimezone(timezone.utc)
+
+    def _fresh_until(
+        self,
+        receipt: Mapping[str, Any],
+        evaluation: Mapping[str, Any],
+    ) -> str | None:
+        if evaluation.get("verdict") not in {"healthy", "verified_no_work"}:
+            return None
+        finished_at = _parse_iso(receipt.get("finished_at"))
+        heartbeat_at = _parse_iso(receipt.get("heartbeat_at"))
+        if finished_at is None or heartbeat_at is None:
+            return None
+        try:
+            return _sortable_iso(max(finished_at, heartbeat_at) + self.stale_after)
+        except OverflowError:
+            return None
+
+    def _reevaluate_stored(
+        self,
+        receipt: Mapping[str, Any],
+        evaluated_at: str,
+    ) -> tuple[dict[str, Any], str | None]:
+        now = _parse_iso(evaluated_at)
+        if now is None:
+            raise ValueError("invalid reevaluation timestamp")
+        evaluation = evaluate_receipt(
+            receipt,
+            now=now,
+            stale_after=self.stale_after,
+        ).to_dict()
+        return evaluation, self._fresh_until(receipt, evaluation)
 
     def ingest(self, receipt: Mapping[str, Any] | Any) -> dict[str, Any]:
-        now = self._clock().astimezone(timezone.utc)
+        now = self._now()
         evaluation = evaluate_receipt(
             receipt,
             now=now,
@@ -42,6 +104,7 @@ class TruthService:
             receipt,
             evaluation_data,
             received_at=_iso(now),
+            fresh_until=self._fresh_until(receipt, evaluation_data),
         )
         return {
             "storage_id": storage_id,
@@ -50,7 +113,24 @@ class TruthService:
         }
 
     def samples(self) -> list[dict[str, Any]]:
-        return demo_receipts(self._clock().astimezone(timezone.utc))
+        return demo_receipts(self._now())
+
+    def list_runs(
+        self,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        return self.repository.list_runs(limit=limit, offset=offset)
+
+    def get_run(self, storage_id: str) -> dict[str, Any] | None:
+        return self.repository.get_run(storage_id)
+
+    def summary(self) -> dict[str, Any]:
+        return self.repository.summary()
+
+    def verdict_history(self, storage_id: str) -> list[dict[str, Any]]:
+        return self.repository.verdict_history(storage_id)
 
     def load_demo(self) -> dict[str, Any]:
         results = [self.ingest(receipt) for receipt in self.samples()]

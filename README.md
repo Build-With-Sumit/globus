@@ -21,8 +21,8 @@ Open source under [AGPL-3.0](LICENSE). The managed version lives inside
 
 You give it:
 - **Your data sources** (any subset, all optional): Google Drive,
-  Gmail, Microsoft Teams (Graph API), WhatsApp Web (via a Chrome
-  extension), Telegram (via Telethon), Freshsales CRM, Google
+  Gmail, Microsoft Teams and WhatsApp Web (via a Chrome extension),
+  Telegram (via Telethon), Freshsales CRM, Google
   Analytics, Obsidian zip uploads, raw markdown paste.
 - **Your members** (the people who get an account on your install).
 
@@ -37,9 +37,9 @@ It runs three surfaces:
 2. **Members voice** — same page, JARVIS-style orb. Hands-free voice
    conversation via ElevenLabs. Same brain, same tools, same data —
    just out loud. Vault-aware.
-3. **Public preview** — `/globus`. Cheap public chat (Claude Haiku
-   built into ElevenLabs) for visitors. No vault access. Allowlist-
-   gated so an abuser can't run up your bill.
+3. **Public preview** — `/globus`. An opt-in text preview using the
+   configured LLM. It has no vault or tool access and is guarded by
+   per-IP and install-wide daily caps.
 
 Plus a **background agent fleet** (`/members/globus/agents`) that runs
 on schedules and produces briefs you read at 8 AM. Each agent
@@ -68,22 +68,48 @@ does not call an external service. Its [README](globus_truth/README.md) document
 the receipt contract, API, integration path, supported platforms, limitations,
 and test command.
 
+The OSS agent runner is wired into that contract end to end. Once a run has a
+durable ledger ID, Globus reopens its artifact, verifies the byte count and
+SHA-256, scans the actual model reply for empty/refusal-like output, persists an
+install-scoped member receipt, and shows the resulting verdict in both the
+Agents dashboard and chat activity console. A run is marked `ok` only after a
+trusted receipt is persisted; identity or persistence failures fail closed.
+
+```mermaid
+flowchart LR
+    A[Globus agent run] --> B[Markdown brief]
+    B --> C[Read-back + SHA-256]
+    C --> D[Versioned receipt]
+    D --> E[Deterministic evaluator]
+    E --> F[Immutable SQLite history]
+    E --> G[Verdict in Globus UI]
+```
+
+Run the complete hermetic repository check—including all 55 Truth Layer tests,
+the real-runner adapter, UI rendering, broader workflow invariants, and public
+asset smoke tests—with:
+
+```bash
+python scripts/test_all.py
+```
+
 For a camera-friendly explanation of what we built—including the exact Codex
 and GPT-5.6 contribution, a 60-second reel script, a longer YouTube script,
 screen cues, and accuracy guardrails—read
 [**The Globus Truth Layer build story**](docs/TRUTH_LAYER_BUILD_STORY.md).
 
-**Scope disclosure:** Globus Truth Layer is the new component built during
-OpenAI Build Week with Codex and GPT-5.6. The broader Claude-native Globus
-platform and its existing agent fleet predate Build Week; this repository does
-not claim they were built with Codex or GPT-5.6.
+**Scope disclosure:** Globus Truth Layer and its public OSS AgentRunner
+integration are the new work built during OpenAI Build Week with Codex and
+GPT-5.6. The broader Claude-native Globus platform and its existing agent fleet
+predate Build Week; this repository does not claim they were built with Codex
+or GPT-5.6.
 
 ## The brain
 
 | Surface | Default LLM | Why |
 |---|---|---|
-| Members text chat + voice | **Claude Sonnet** via a local [OAuth proxy](scripts/claude_oauth_proxy.md) (your Claude Max subscription, zero per-token spend) | Best tradeoff of quality and speed. Falls back to Anthropic API direct (still Claude) if the proxy is down. |
-| Public preview chat | **Claude Haiku 4.5** (built into ElevenLabs) | Cheap. No vault. Abuse-capped via allowlist. |
+| Members text chat + voice | **Claude Sonnet** via a local [OAuth-proxy integration](docs/claude-oauth-proxy.md), or the Anthropic API directly | Best tradeoff of quality and speed. Falls back to Anthropic API direct (still Claude) if configured. |
+| Public preview chat | **Configured Globus LLM** (opt-in) | No vault or tools; guarded by per-IP and daily caps. |
 | Background vault builder | **DeepSeek-V3** (direct API) | Bulk markdown classification; Claude rate limits made batch ingestion painful. |
 
 All swappable via the config table (see [INSTALL.md](INSTALL.md)).
@@ -141,9 +167,8 @@ mysql -uglobus -pchange-me globus < schema/globus_schema.sql
 cp config/.env.example .env
 $EDITOR .env   # ANTHROPIC_API_KEY, DB_HOST, …
 
-# 4. Brain — start the Claude OAuth proxy (zero-per-token via your Claude Max sub)
-#    OR set GLOBUS_LLM_PROVIDER=anthropic + ANTHROPIC_API_KEY for direct.
-./scripts/claude-oauth-proxy.sh  # see docs/claude-oauth-proxy.md
+# 4. Brain — use Anthropic directly, DeepSeek, or operate a compatible
+#    loopback Claude OAuth bridge. See docs/claude-oauth-proxy.md.
 
 # 5. Run
 python3 server/globus_server.py   # http://127.0.0.1:8090
@@ -166,16 +191,15 @@ Globus is opinionated. Bring your own:
 
 ## Status
 
-- **v0.5 (current)** — text + voice chat, vault from any combo of
+- **v0.11 (current)** — text + voice chat, vault from any combo of
   Obsidian zip / Google Drive / Gmail / WhatsApp Web / Microsoft Teams
   (the last two via a Chrome extension bridge), **plus a working agents
   subsystem**: 3 sample agents (research, sales-desk, infra-watch)
   produce daily markdown briefs you can read at 8 AM. Fire from chat
   ("run research"), the dashboard at `/members/globus/agents`, or
   cron via `scripts/run_agent.py`. Each brief lands as a per-member
-  file on disk + a row in `globus_agent_runs`. Telegram via Telethon
-  daemon (separate repo) is the only major source still ahead — see
-  [ROADMAP.md](ROADMAP.md).
+  file on disk + a row in `globus_agent_runs`. A deployable public
+  Telegram ingestion daemon is still ahead — see [ROADMAP.md](ROADMAP.md).
 - **Alpha** — works in production at buildwithsumit.com but every
   install will need hands-on setup. No managed-installer yet.
 - **Roadmap** is in [ROADMAP.md](ROADMAP.md). Voice cost/latency rebuild
@@ -185,16 +209,17 @@ Globus is opinionated. Bring your own:
 
 PRs welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) first.
 
-The project memory + design rationale lives in [docs/](docs/) — read
-the ADRs (`docs/architecture/`) before proposing structural changes.
+Project rationale and operating notes live in [docs/](docs/) and
+[ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Built with
 
 [Claude](https://www.anthropic.com/), [DeepSeek](https://www.deepseek.com/),
 [ElevenLabs](https://elevenlabs.io/), [Telethon](https://github.com/LonamiWebs/Telethon),
-[PyMySQL](https://github.com/PyMySQL/PyMySQL). All standard library
-otherwise — no Flask, no Django, no SQLAlchemy. The Python `http.server`
-is doing the work.
+[PyMySQL](https://github.com/PyMySQL/PyMySQL), and
+[cryptography](https://cryptography.io/). Optional Composio and PDF extraction
+dependencies are isolated in `requirements-optional.txt`; there is no Flask,
+Django, or SQLAlchemy. The Python `http.server` is doing the HTTP work.
 
 ## License
 

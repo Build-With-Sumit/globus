@@ -1,0 +1,9 @@
+# Optional Globus integrations. Install only when the matching feature is used:
+#   pip install -r requirements-optional.txt
+
+# Third-party tool catalog + managed OAuth for Calendar/GitHub/Notion/Slack.
+composio>=0.7,<1
+
+# PDF text extraction for Drive vault ingestion. Without it, PDFs record a
+# named skip while stdlib OOXML extraction for docx/xlsx/pptx still works.
+pypdf>=4.0

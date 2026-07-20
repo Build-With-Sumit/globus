@@ -70,9 +70,9 @@ JavaScript framework. The standard-library `http.server` does the work.
   ┌─────────┐         ┌──────────────────────┐         ┌────────────────────┐
   │ MySQL 8 │         │  Claude OAuth proxy  │         │  ElevenLabs        │
   │ globus  │         │  127.0.0.1:8787      │         │  (voice STT/TTS +  │
-  │  DB     │         │  (your Claude Max    │         │   custom-LLM       │
-  │         │         │   subscription —     │         │   webhook to our   │
-  │ 18      │         │   zero per-token)    │         │   /api/globus/     │
+  │  DB     │         │  (operator-supplied  │         │   custom-LLM       │
+  │         │         │   loopback bridge —  │         │   webhook to our   │
+  │ 35      │         │   operator-owned)    │         │   /api/globus/     │
   │ tables  │         └──────────────────────┘         │   voice-llm)       │
   └─────────┘                                          └────────────────────┘
 ```
@@ -112,6 +112,13 @@ globus_tools_schema ◄─── (chat orchestrator)
 agents_runtime  ◄─── (run_agent tool + agents dashboard)
 globus_agents_catalog ◄─── (agents UI + run_agent tool)
 globus_agents_helpers ◄─── (agents UI + brief viewer)
+
+agent_runner    ◄─── (OSS orchestrator + MySQL run row)
+   │
+   └── globus_truth.agent_adapter
+          ├── evaluator      (deterministic receipt verdict)
+          ├── service        (ingest + stale-aware reads)
+          └── storage        (immutable SQLite history)
 ```
 
 ## Data flow — one chat turn
@@ -140,6 +147,28 @@ globus_agents_helpers ◄─── (agents UI + brief viewer)
 8. Handler logs assistant response to `globus_messages`, returns
    `{reply: "...", usage: {...}}`.
 
+## Data flow — one verified OSS agent run
+
+1. `agent_runner.run_agent_for_member()` creates a durable, member-scoped
+   MySQL run row and records an aware UTC start time.
+2. The real Globus orchestrator runs the catalog task over that member’s vault.
+3. The runner writes the Markdown brief as exact bytes and computes the
+   expected byte count and SHA-256.
+4. `globus_truth.agent_adapter` reopens the artifact and independently measures
+   the bytes and digest.
+5. The adapter checks the actual model reply for empty, too-short,
+   refusal-like, or error-like output. Private reply text is not copied into
+   the Truth database.
+6. It emits a versioned receipt using an install-keyed HMAC member pseudonym
+   and a receipt ID deterministically bound to the durable MySQL run ID.
+7. The evaluator returns one of five explainable verdicts and stores the
+   immutable receipt plus verdict history in SQLite.
+8. The MySQL row becomes `ok` only for a trusted verdict. The status API sends
+   only compact verdict metadata to the Agents dashboard and chat activity
+   console.
+9. Later reads automatically age an otherwise trusted receipt to `stale` after
+   its freshness deadline; polling records history only if the verdict changes.
+
 ## Data flow — one voice turn (ElevenLabs custom-LLM)
 
 ElevenLabs handles ASR (speech → text) + TTS (text → speech). Our
@@ -150,13 +179,11 @@ chat/completions` (OpenAI-shape) for each user turn.
 2. Member speaks → ElevenLabs transcribes → calls our endpoint with
    `{messages: [...], model: "globus", stream: true}`.
 3. Our endpoint verifies HMAC bearer token (`GLOBUS_VOICE_LLM_SECRET`).
-4. We start a background keepalive thread streaming a space every
-   2.5s (required — ElevenLabs has a content timeout that drops the
-   call if no tokens flow). `_wfile_lock` serializes keepalive vs
-   real answer writes — never add an unlocked wfile.write to the voice
-   path.
-5. Same chat orchestrator as text (step 5–7 above). We stream the
-   final answer as SSE chunks.
+4. The same chat orchestrator as text runs steps 5–7 above. The OSS route
+   buffers the answer, then returns it in the OpenAI-compatible response shape.
+   It does not implement the production-only per-turn keepalive or word-level
+   streaming path.
+5. ElevenLabs turns the returned text into speech for the member.
 6. ElevenLabs speaks the answer back to the member.
 
 ## Per-member isolation (load-bearing)
@@ -247,4 +274,5 @@ relevant to Globus:
 - **005** — open-core via AGPL
 - **007** — Globus plugin architecture (where this is headed)
 
-These will be ported into this repo's `docs/architecture/` over time.
+This public file is the current source of truth until those longer ADRs are
+published here.

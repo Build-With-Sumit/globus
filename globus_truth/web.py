@@ -273,13 +273,13 @@ class TruthRequestHandler(BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
         if path == "/api/v1/summary":
-            self._json(200, self.server.service.repository.summary())
+            self._json(200, self.server.service.summary())
             return
         if path == "/api/v1/runs":
             try:
                 limit = int(query.get("limit", ["100"])[0])
                 offset = int(query.get("offset", ["0"])[0])
-                runs = self.server.service.repository.list_runs(limit=limit, offset=offset)
+                runs = self.server.service.list_runs(limit=limit, offset=offset)
             except (ValueError, TypeError):
                 self._error(400, "limit must be 1-500 and offset must be non-negative")
                 return
@@ -290,7 +290,7 @@ class TruthRequestHandler(BaseHTTPRequestHandler):
             if not _SAFE_STORAGE_ID.fullmatch(storage_id):
                 self._error(400, "invalid receipt identifier")
                 return
-            run = self.server.service.repository.get_run(storage_id)
+            run = self.server.service.get_run(storage_id)
             if run is None:
                 self._error(404, "receipt not found")
             else:

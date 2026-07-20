@@ -145,8 +145,8 @@ def public_globus_landing_html(public_chat_enabled=False):
         '<span class="tc-icon">🔐</span> Yours, not ours</div></div>'
         '<p class="tc-desc">Each member\'s data is isolated to that '
         'member\'s account. No cross-member access, no training on your '
-        'data. Source-available infrastructure — see '
-        '<a href="https://github.com/Globussoft-Technologies/buildwithsumit" '
+        'data. Open-source infrastructure — see '
+        '<a href="https://github.com/Build-With-Sumit/globus" '
         'target="_blank" rel="noopener">GitHub</a>.</p>'
         '</div>'
 

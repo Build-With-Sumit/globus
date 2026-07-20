@@ -170,7 +170,17 @@ label > input,label > textarea{margin-top:.35rem;font-weight:400}
   width:5em}
 .agent-console .ac-tbl td.c-status{width:3em}
 .agent-console .ac-tbl td.c-status.ok{color:#16a34a}
-.agent-console .ac-tbl td.c-status.fail{color:#dc2626}
+.agent-console .ac-tbl td.c-status.fail,
+.agent-console .ac-tbl td.c-status.error{color:#dc2626}
+.agent-console .truth-badge{display:inline-block;padding:.12rem .42rem;
+  border-radius:999px;white-space:nowrap;font-size:.68rem;font-weight:700;
+  line-height:1.35}
+.agent-console .truth-healthy{background:#dcfce7;color:#166534}
+.agent-console .truth-verified_no_work{background:#e0f2fe;color:#075985}
+.agent-console .truth-degraded_contradictory{background:#fef3c7;color:#92400e}
+.agent-console .truth-failed{background:#fee2e2;color:#991b1b}
+.agent-console .truth-stale{background:#ede9fe;color:#5b21b6}
+.agent-console .truth-none{background:#e5e7eb;color:#4b5563}
 .agent-console .ac-tbl td a{color:var(--text);text-decoration:none}
 .agent-console .ac-tbl td a:hover{text-decoration:underline}
 .agent-console #ac-status{color:var(--text-muted);font-weight:400}

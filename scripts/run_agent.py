@@ -14,8 +14,10 @@ Example crontab line — fire research agent at 8 AM IST daily:
               scripts/run_agent.py research you@example.com \\
               >> /var/log/globus-agents.log 2>&1
 
-Briefs land in $GLOBUS_AGENTS_WORK_DIR/<sha1(email)[:16]>/<agent>-<date>.md
-(default /var/lib/globus/agents/<hash>/).
+Briefs land in
+$GLOBUS_AGENTS_WORK_DIR/<sha1(email)[:16]>/<agent>-<timestamp>-run-<id>.md
+(default /var/lib/globus/agents/<hash>/). The durable run ID prevents a later
+run from overwriting the evidence referenced by an earlier Truth receipt.
 """
 from __future__ import annotations
 import os
@@ -45,6 +47,7 @@ def main():
 
     repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     _load_env(os.path.join(repo_root, ".env"))
+    sys.path.insert(0, repo_root)
     sys.path.insert(0, os.path.join(repo_root, "server"))
 
     # Configure the same way globus_server does — same boot order,
@@ -60,9 +63,27 @@ def main():
 
     # SESSION_SECRET only needed if the agent's tool loop touches
     # cookie/voice helpers — safe to wire anyway.
-    secret_hex = os.environ.get("SESSION_SECRET", "")
+    secret_hex = os.environ.get("SESSION_SECRET", "").strip()
+    if not secret_hex or secret_hex == "replace-with-32-byte-hex":
+        state_dir = os.environ.get(
+            "GLOBUS_STATE_DIR", os.path.join(repo_root, ".state")
+        )
+        secret_file = os.path.join(state_dir, "session_secret.hex")
+        try:
+            with open(secret_file, encoding="utf-8") as fh:
+                secret_hex = fh.read().strip()
+        except OSError:
+            secret_hex = ""
     if secret_hex:
-        session_secret = bytes.fromhex(secret_hex)
+        try:
+            session_secret = bytes.fromhex(secret_hex)
+        except ValueError:
+            print(
+                "run_agent: SESSION_SECRET must be valid hexadecimal",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+        os.environ["SESSION_SECRET"] = secret_hex
         import voice_helpers, globus_auth, bridge_ingest
         voice_helpers.configure(session_secret=session_secret)
         globus_auth.configure(session_secret=session_secret)

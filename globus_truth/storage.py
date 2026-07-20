@@ -8,7 +8,22 @@ import sqlite3
 import threading
 from contextlib import closing
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
+
+
+_TRUSTED_VERDICTS = ("healthy", "verified_no_work")
+_VERDICTS = {
+    "healthy",
+    "verified_no_work",
+    "degraded_contradictory",
+    "failed",
+    "stale",
+}
+_MAX_REEVALUATIONS_PER_READ = 500
+_Reevaluator = Callable[
+    [Mapping[str, Any], str],
+    tuple[Mapping[str, Any], str | None],
+]
 
 
 class ReceiptConflict(ValueError):
@@ -31,6 +46,8 @@ class TruthRepository:
     def __init__(self, database: str | Path) -> None:
         self.database = str(database)
         self._lock = threading.RLock()
+        self._reevaluation_clock: Callable[[], str] | None = None
+        self._reevaluator: _Reevaluator | None = None
         self._uri = self.database == ":memory:"
         self._target = (
             f"file:globus_truth_{id(self)}?mode=memory&cache=shared"
@@ -41,6 +58,19 @@ class TruthRepository:
         if self._uri:
             self._keeper = sqlite3.connect(self._target, uri=True, timeout=5.0)
         self._initialize()
+
+    def close(self) -> None:
+        """Release the anchor used to keep a shared in-memory database alive."""
+        with self._lock:
+            keeper, self._keeper = self._keeper, None
+        if keeper is not None:
+            keeper.close()
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            pass
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self._target, uri=self._uri, timeout=5.0)
@@ -84,6 +114,7 @@ class TruthRepository:
                         )
                     ),
                     evaluated_at TEXT NOT NULL,
+                    fresh_until TEXT,
                     reason_codes_json TEXT NOT NULL,
                     checks_json TEXT NOT NULL
                 );
@@ -91,6 +122,30 @@ class TruthRepository:
                     ON verdicts(storage_id, id DESC);
                 """
             )
+            columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(verdicts)").fetchall()
+            }
+            if "fresh_until" not in columns:
+                connection.execute("ALTER TABLE verdicts ADD COLUMN fresh_until TEXT")
+            connection.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_verdicts_freshness
+                    ON verdicts(verdict, fresh_until)
+                """
+            )
+
+    def configure_stale_reevaluation(
+        self,
+        *,
+        clock: Callable[[], str],
+        reevaluator: _Reevaluator,
+    ) -> None:
+        """Install deterministic callbacks used to age persisted trusted verdicts."""
+
+        with self._lock:
+            self._reevaluation_clock = clock
+            self._reevaluator = reevaluator
 
     @staticmethod
     def storage_id(receipt: Mapping[str, Any], payload_json: str | None = None) -> str:
@@ -106,6 +161,7 @@ class TruthRepository:
         evaluation: Mapping[str, Any],
         *,
         received_at: str,
+        fresh_until: str | None = None,
     ) -> tuple[str, bool]:
         """Persist an immutable receipt and one evaluation.
 
@@ -150,24 +206,179 @@ class TruthRepository:
             connection.execute(
                 """
                 INSERT INTO verdicts
-                    (storage_id, verdict, evaluated_at, reason_codes_json, checks_json)
-                VALUES (?, ?, ?, ?, ?)
+                    (
+                        storage_id,
+                        verdict,
+                        evaluated_at,
+                        fresh_until,
+                        reason_codes_json,
+                        checks_json
+                    )
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 (
                     storage_id,
                     evaluation["verdict"],
                     evaluation["evaluated_at"],
+                    (
+                        fresh_until
+                        if evaluation["verdict"] in _TRUSTED_VERDICTS
+                        else None
+                    ),
                     _canonical_json(evaluation["reason_codes"]),
                     _canonical_json(evaluation["checks"]),
                 ),
             )
         return storage_id, created
 
+    def _refresh_due_verdicts(
+        self,
+        *,
+        limit: int = _MAX_REEVALUATIONS_PER_READ,
+        storage_ids: list[str] | None = None,
+    ) -> int:
+        """Reevaluate a bounded set of latest trusted verdicts whose signal expired."""
+
+        with self._lock:
+            clock = self._reevaluation_clock
+            reevaluator = self._reevaluator
+        if clock is None or reevaluator is None or limit < 1:
+            return 0
+        evaluated_at = clock()
+        if not isinstance(evaluated_at, str) or not evaluated_at:
+            raise ValueError("reevaluation clock must return an ISO timestamp")
+        if storage_ids == []:
+            return 0
+
+        filters = [
+            "v.verdict IN (?, ?)",
+            "(v.fresh_until IS NULL OR v.fresh_until < ?)",
+        ]
+        parameters: list[Any] = [
+            *_TRUSTED_VERDICTS,
+            evaluated_at,
+        ]
+        if storage_ids is not None:
+            filters.append(
+                "r.storage_id IN (" + ", ".join("?" for _ in storage_ids) + ")"
+            )
+            parameters.extend(storage_ids)
+        batch_limit = min(limit, _MAX_REEVALUATIONS_PER_READ)
+        parameters.append(batch_limit)
+        with self._lock, closing(self._connect()) as connection:
+            candidates = connection.execute(
+                f"""
+                SELECT r.storage_id, r.payload_json,
+                       v.id AS verdict_id, v.verdict
+                  FROM receipts AS r
+                  JOIN verdicts AS v ON v.id = (
+                      SELECT MAX(v2.id) FROM verdicts AS v2
+                       WHERE v2.storage_id = r.storage_id
+                  )
+                 WHERE {" AND ".join(filters)}
+                 ORDER BY
+                       CASE WHEN v.fresh_until IS NULL THEN 0 ELSE 1 END,
+                       v.fresh_until,
+                       v.id
+                 LIMIT ?
+                """,
+                parameters,
+            ).fetchall()
+
+        for candidate in candidates:
+            receipt = json.loads(candidate["payload_json"])
+            evaluation, fresh_until = reevaluator(receipt, evaluated_at)
+            verdict = evaluation.get("verdict")
+            if verdict not in _VERDICTS:
+                raise ValueError("reevaluator returned an unsupported verdict")
+
+            with self._lock, closing(self._connect()) as connection:
+                # Repository instances have separate Python locks. A SQLite
+                # write lock plus an in-transaction recheck makes one verdict
+                # transition globally atomic across threads and processes.
+                connection.execute("BEGIN IMMEDIATE")
+                try:
+                    latest = connection.execute(
+                        """
+                        SELECT id, verdict, fresh_until
+                          FROM verdicts
+                         WHERE storage_id = ?
+                         ORDER BY id DESC
+                         LIMIT 1
+                        """,
+                        (candidate["storage_id"],),
+                    ).fetchone()
+                    if (
+                        latest is None
+                        or latest["id"] != candidate["verdict_id"]
+                        or latest["verdict"] not in _TRUSTED_VERDICTS
+                        or (
+                            latest["fresh_until"] is not None
+                            and latest["fresh_until"] >= evaluated_at
+                        )
+                    ):
+                        connection.commit()
+                        continue
+                    if verdict == latest["verdict"]:
+                        # Legacy trusted rows have no deadline. Backfill it
+                        # without manufacturing an unchanged audit event.
+                        connection.execute(
+                            "UPDATE verdicts SET fresh_until = ? WHERE id = ?",
+                            (fresh_until, latest["id"]),
+                        )
+                        connection.commit()
+                        continue
+                    connection.execute(
+                        """
+                        INSERT INTO verdicts
+                            (
+                                storage_id,
+                                verdict,
+                                evaluated_at,
+                                fresh_until,
+                                reason_codes_json,
+                                checks_json
+                            )
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            candidate["storage_id"],
+                            verdict,
+                            evaluation["evaluated_at"],
+                            (
+                                fresh_until
+                                if verdict in _TRUSTED_VERDICTS
+                                else None
+                            ),
+                            _canonical_json(evaluation["reason_codes"]),
+                            _canonical_json(evaluation["checks"]),
+                        ),
+                    )
+                    connection.commit()
+                except Exception:
+                    connection.rollback()
+                    raise
+        return len(candidates)
+
     def list_runs(self, *, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
         if not isinstance(limit, int) or not 1 <= limit <= 500:
             raise ValueError("limit must be between 1 and 500")
         if not isinstance(offset, int) or not 0 <= offset <= 1_000_000:
             raise ValueError("offset must be between 0 and 1,000,000")
+        with self._lock, closing(self._connect()) as connection:
+            page_ids = [
+                row["storage_id"]
+                for row in connection.execute(
+                    """
+                    SELECT storage_id
+                      FROM receipts
+                     ORDER BY received_at DESC, storage_id DESC
+                     LIMIT ? OFFSET ?
+                    """,
+                    (limit, offset),
+                ).fetchall()
+            ]
+        self._refresh_due_verdicts(limit=limit, storage_ids=page_ids)
         with self._lock, closing(self._connect()) as connection:
             rows = connection.execute(
                 """
@@ -189,6 +400,7 @@ class TruthRepository:
     def get_run(self, storage_id: str) -> dict[str, Any] | None:
         if not isinstance(storage_id, str) or not storage_id or len(storage_id) > 200:
             return None
+        self._refresh_due_verdicts(limit=1, storage_ids=[storage_id])
         with self._lock, closing(self._connect()) as connection:
             row = connection.execute(
                 """
@@ -223,6 +435,13 @@ class TruthRepository:
         }
 
     def summary(self) -> dict[str, Any]:
+        while (
+            self._refresh_due_verdicts()
+            == _MAX_REEVALUATIONS_PER_READ
+        ):
+            # Summary counts the whole fleet, so age every due batch before
+            # returning rather than mixing fresh and expired trusted rows.
+            pass
         counts = {
             "healthy": 0,
             "verified_no_work": 0,
@@ -256,6 +475,8 @@ class TruthRepository:
         }
 
     def verdict_history(self, storage_id: str) -> list[dict[str, Any]]:
+        if isinstance(storage_id, str) and storage_id and len(storage_id) <= 200:
+            self._refresh_due_verdicts(limit=1, storage_ids=[storage_id])
         with self._lock, closing(self._connect()) as connection:
             rows = connection.execute(
                 """

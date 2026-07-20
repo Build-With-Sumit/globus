@@ -1,7 +1,7 @@
 # Installing Globus
 
 > **Status: alpha.** The reference implementation runs in production at
-> buildwithsumit.com. This guide gets v0.5 running on your box — sign-in
+> buildwithsumit.com. This guide gets v0.11 running on your box — sign-in
 > via OTP, vault from Obsidian zip + Google Drive + Gmail + the
 > WhatsApp/Teams Chrome extension, text and voice chat (ElevenLabs;
 > see [`docs/voice-setup.md`](docs/voice-setup.md)), and a working
@@ -11,29 +11,32 @@
 
 ## What you'll need
 
-- **Docker + Docker Compose** (the fast path; see § Quick start below).
+- **Docker + Docker Compose v2.24+** (the fast path; see § Quick start below).
 - OR for a manual install: **Ubuntu 22.04+**, **Python 3.10+**, **MySQL 8**,
   **nginx** (for TLS + reverse proxy in prod — optional for local dev).
 - **An LLM** — one of:
-  - A **Claude Max subscription** + the [OAuth proxy](docs/claude-oauth-proxy.md)
-    (recommended — zero per-token spend)
+  - An operator-supplied [Claude OAuth-compatible loopback bridge](docs/claude-oauth-proxy.md)
   - An **Anthropic API key** (direct API, pay per token)
   - A **DeepSeek API key** (cheap fallback; lower quality)
-- **Optional sources** — Google OAuth client (Drive + Gmail), Microsoft
-  Graph OAuth (Teams), Telethon API credentials (Telegram), an
-  ElevenLabs Conversational AI agent (voice).
+- **Optional sources** — Google OAuth client (Drive + Gmail), the
+  WhatsApp/Teams Chrome-extension bridge, Telethon API credentials
+  (Telegram), and an ElevenLabs Conversational AI agent (voice).
 
 ## Quick start (Docker — recommended)
 
-Five commands and you have a working Globus on `http://localhost:8090`:
+These commands boot MySQL and the Globus UI on `http://localhost:8090`.
+Credential-free login and navigation work immediately; chat and integrated
+AgentRunner execution additionally need one configured LLM provider. The
+standalone Truth demo is a separate `python -m globus_truth` process on port
+8765.
 
 ```bash
 git clone https://github.com/Build-With-Sumit/globus.git
 cd globus
 
 cp config/.env.example .env
-$EDITOR .env       # at minimum: set DB_PASSWORD + GLOBUS_FIRST_MEMBER_EMAIL
-                   # (the rest can stay at defaults for local testing)
+$EDITOR .env       # set DB_PASSWORD + GLOBUS_FIRST_MEMBER_EMAIL
+                   # for chat/agents, also set an LLM provider + API key
 
 docker compose up -d
 ```
@@ -44,7 +47,8 @@ What the entrypoint does on first boot:
 3. Generates `SESSION_SECRET` if you didn't supply one, persists to a
    named volume so restarts keep the same secret.
 4. Seeds `GLOBUS_FIRST_MEMBER_EMAIL` as an active member if set.
-5. Starts the Python server on `:8090`.
+5. Creates persistent storage for Truth Layer receipts produced by agent runs.
+6. Starts the Python server on `:8090`.
 
 Then sign in:
 
@@ -60,19 +64,50 @@ Common ops:
 ```bash
 docker compose logs -f globus       # follow app log
 docker compose exec globus bash     # shell inside the container
-docker compose exec db mysql -uglobus -p$DB_PASSWORD globus  # SQL prompt
+docker compose exec db sh -lc \
+  'mysql -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" "$MYSQL_DATABASE"'  # SQL prompt
 docker compose down                 # stop (state persists in volumes)
 docker compose down -v              # nuke everything including volumes
 ```
 
-The image is `python:3.12-slim` + ~120 MB of dependencies (PyMySQL +
-cryptography + tini + mysql-client). State persists in three named
-volumes: `db_data` (MySQL), `agent_briefs`
-(`/var/lib/globus/agents`), `drive_cache` (`/var/lib/globus/raw-data`).
+The image is based on `python:3.12-slim` and installs the dependencies in
+`requirements.txt` plus `tini` and the MySQL client. State persists in four
+named volumes: `db_data` (MySQL), `agent_briefs`
+(`/var/lib/globus/agents`), `drive_cache` (`/var/lib/globus/raw-data`),
+and `globus_state` (session secret plus the agent Truth Layer database at
+`/app/.state/globus-truth.db`).
 
-For voice + OAuth providers, follow §§ "Google OAuth" / "ElevenLabs"
-in the [Bootstrap config](#3-bootstrap-config) section below — those
-env vars work identically in Docker (set in `.env`).
+A run is marked `ok` only after a trusted Truth Layer receipt is persisted.
+Identity, model, artifact, or receipt-persistence failures remain non-green.
+To inspect persisted receipts from inside the container:
+
+```bash
+docker compose exec globus \
+  python3 -m globus_truth list --db /app/.state/globus-truth.db
+```
+
+For Drive and Gmail, follow [Google OAuth](#google-oauth-optional--needed-for-drive--gmail-sync).
+For voice, follow [`docs/voice-setup.md`](docs/voice-setup.md). Those
+environment variables work identically in Docker when set in `.env`.
+
+### Judge flow for one integrated verified run
+
+After setting `GLOBUS_FIRST_MEMBER_EMAIL=you@example.com` and either
+`GLOBUS_LLM_PROVIDER=anthropic` with `ANTHROPIC_API_KEY`, or
+`GLOBUS_LLM_PROVIDER=deepseek` with `DEEPSEEK_API_KEY`:
+
+```bash
+docker compose up -d
+docker compose exec globus \
+  python3 scripts/run_agent.py research you@example.com
+docker compose exec globus \
+  python3 -m globus_truth list --db /app/.state/globus-truth.db
+```
+
+Sign in, then open `http://localhost:8090/members/globus/agents` to see the
+runner state and Truth verdict separately. An actual provider key is required
+for this integrated run; the standalone `python -m globus_truth` demo remains
+credential-free.
 
 If you'd rather not use Docker, skip to § 1 below.
 
@@ -85,6 +120,12 @@ cd globus
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+```
+
+Only installs using the Composio tool catalog or PDF vault extraction need:
+
+```bash
+pip install -r requirements-optional.txt
 ```
 
 ## 2. MySQL
@@ -103,7 +144,7 @@ mysql -u globus -p globus < schema/globus_schema.sql
 Verify:
 ```bash
 mysql -u globus -p globus -e 'SHOW TABLES;'
-# should list ~18 tables: members, auth_codes, config, globus_*, etc.
+# should list 35 tables: members, auth_codes, config, globus_*, etc.
 ```
 
 ## 3. Bootstrap config
@@ -150,20 +191,20 @@ Members can then connect a Google account at `/members/connect`. The
 first sync fires immediately in the background; subsequent syncs run
 hourly when the connection is older than 1h.
 
-For other providers (Microsoft Teams, ElevenLabs voice), see their
-dedicated docs — those land in v0.3b+ ([ROADMAP.md](ROADMAP.md)).
+For ElevenLabs voice, see [`docs/voice-setup.md`](docs/voice-setup.md).
+Teams and WhatsApp use the extension bridge described in
+[ROADMAP.md](ROADMAP.md#v03c-partial--telegram--whatsapp--teams-bridges).
 
 ## 4. Pick your LLM
 
-### Option A — Claude OAuth proxy (recommended, zero per-token cost)
+### Option A — operator-supplied Claude OAuth bridge
 
-If you have a Claude Max subscription, run the OAuth proxy on the same
-box. It wraps `claude --print` and exposes an OpenAI-compatible
-endpoint at `127.0.0.1:8787`.
+If you operate a compatible bridge, run it on the same host. Globus expects an
+OpenAI-compatible endpoint at `127.0.0.1:8787`.
 
 See [`docs/claude-oauth-proxy.md`](docs/claude-oauth-proxy.md) for the
-full setup (a one-time `claude` CLI login + a systemd unit). Defaults
-in `.env`:
+exact request/response contract, security boundary, Docker caveat, and direct
+provider alternatives. Defaults in `.env`:
 
 ```bash
 GLOBUS_LLM_PROVIDER=claude-oauth
@@ -204,7 +245,7 @@ one specific team. Define your own.
 
 ```bash
 python3 server/globus_server.py
-# globus/0.3 booting on 127.0.0.1:8090
+# globus/0.11.0 booting on 127.0.0.1:8090
 #   site:     https://globus.example.com
 #   db:       globus@127.0.0.1:3306/globus
 #   llm:      claude-oauth
@@ -545,7 +586,13 @@ python tests/test_opportunity_tracker.py
 
 ```bash
 git pull
-mysql -u globus -p globus < schema/globus_schema.sql   # idempotent — CREATE TABLE IF NOT EXISTS
+mysql -u globus -p globus < schema/globus_schema.sql
 pip install -r requirements.txt
 sudo systemctl restart globus.service
 ```
+
+The schema file safely creates missing tables for bootstrap, but
+`CREATE TABLE IF NOT EXISTS` does not add or alter columns on an existing
+installation. Review schema changes between your current commit and the target
+commit and apply any explicit column/data migration before restarting. A formal
+migration framework remains roadmap work.

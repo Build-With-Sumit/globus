@@ -8,11 +8,10 @@ What's here:
     claude paths).
   - globus_call_chat(system, msgs, max_tokens, tools):
         provider dispatcher (cfg('GLOBUS_LLM_PROVIDER')). Defaults to
-        claude-oauth via the local proxy; falls back to DeepSeek if
-        the proxy fails so voice/chat never dies.
+        claude-oauth via an operator-supplied local proxy; falls back
+        to the Anthropic API if that direct-provider key is configured.
   - globus_call_claude_oauth(system, msgs, ...): hits the local
-    claude-oauth proxy at 127.0.0.1:8787 — zero per-call API spend
-    (Sumit's subscription).
+    operator-supplied bridge at 127.0.0.1:8787.
   - globus_call_deepseek_chat(system, msgs, ...): DeepSeek-V3 direct
     (OpenAI-compatible API).
   - globus_call_claude_raw(system, msgs, ...): Anthropic API direct,
@@ -40,16 +39,14 @@ GLOBUS_MODEL = "claude-sonnet-4-6"
 def globus_call_claude_oauth(system, messages, max_tokens=2000, tools=None,
                               model="sonnet"):
     """Drop-in replacement for globus_call_deepseek_chat that routes to
-    Sumit's Claude OAuth subscription via the local proxy at 127.0.0.1:8787
-    (claude_oauth_proxy.service). The proxy wraps `claude --print --model
-    sonnet` and returns OpenAI-shape JSON. ZERO per-call API spend; bounded
-    by subscription rate limits. Default model is Sonnet (faster than Opus —
-    matters for voice turn latency); override via GLOBUS_OAUTH_MODEL.
+    an operator-supplied OpenAI-compatible bridge at 127.0.0.1:8787.
+    Default model is Sonnet (faster than Opus — matters for voice turn
+    latency); override via GLOBUS_OAUTH_MODEL.
 
     Same signature + return shape as globus_call_deepseek_chat so callers
     are symmetric.
 
-    On failure, raises — caller should fall back to DeepSeek."""
+    On failure, raises — the dispatcher may try Anthropic direct."""
     payload = {
         "model": model,
         "messages": [{"role": "system", "content": system}] + list(messages),
@@ -70,8 +67,9 @@ def globus_call_claude_oauth(system, messages, max_tokens=2000, tools=None,
 def globus_call_chat(system, messages, max_tokens=2000, tools=None,
                       model=None):
     """Dispatcher: picks the LLM provider for Globus chat/voice based on
-    config flag GLOBUS_LLM_PROVIDER (DB cfg, env fallback). Falls back to
-    DeepSeek if the preferred provider fails — so voice/chat never dies.
+    config flag GLOBUS_LLM_PROVIDER (DB cfg, env fallback). If the local
+    Claude bridge fails, it attempts Anthropic direct; that fallback still
+    requires a configured Anthropic API key.
 
     `model` PINS the model tier for this one call. Leave it None for the
     interactive chat/voice path (which follows GLOBUS_OAUTH_MODEL), but pass
@@ -81,8 +79,7 @@ def globus_call_chat(system, messages, max_tokens=2000, tools=None,
     (e.g. classifying a mailbox) should pin a small model; only work that
     genuinely needs judgement should pin a large one.
 
-      claude-oauth (default) → Claude Sonnet via local OAuth proxy
-                               (subscription, zero API spend)
+      claude-oauth (default) → Claude Sonnet via an operator bridge
       deepseek               → DeepSeek-V3 direct (legacy; not used by default)
       anthropic              → Anthropic API (Sonnet) direct
 
@@ -103,8 +100,8 @@ def globus_call_chat(system, messages, max_tokens=2000, tools=None,
     except Exception as e:
         # Stay on Claude: fall back to the Anthropic API direct (Sonnet),
         # not DeepSeek, so the Globus brain is always Claude.
-        print(f"[globus-chat] OAuth proxy failed ({type(e).__name__}: "
-              f"{e}), falling back to Anthropic API direct (Claude)", flush=True)
+        print(f"[globus-chat] OAuth proxy failed ({type(e).__name__}); "
+              "falling back to Anthropic API direct (Claude)", flush=True)
         resp = globus_call_claude_raw(system, messages, max_tokens, tools)
         return _anthropic_to_openai_shape(resp)
 
