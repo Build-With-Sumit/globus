@@ -118,8 +118,11 @@ agent_runner    ◄─── (OSS orchestrator + MySQL run row)
    └── globus_truth.agent_adapter
           ├── evaluator      (deterministic receipt verdict)
           ├── service        (ingest + stale-aware reads)
-          ├── storage        (immutable SQLite history)
-          └── judge_mode     (credential-free real-byte challenge)
+          ├── storage        (immutable receipt, verdict + decision history)
+          ├── action_gate    (fail-closed policy authorization)
+          ├── platform_registry (validated source-backed capability map)
+          ├── judge_mode     (credential-free real-byte challenge)
+          └── outcome_challenge (read-back → receipt → gate proof)
 ```
 
 ## Data flow — one chat turn
@@ -184,6 +187,78 @@ agent_runner    ◄─── (OSS orchestrator + MySQL run row)
 6. The dashboard shows both point-in-time observations. The response contains
    generated IDs, a relative filename, measurements, hashes, and verdicts—no
    member data or absolute filesystem paths.
+
+## Data flow — Mission Control Action Gate
+
+The Action Gate is deliberately downstream of persisted evidence. Callers do
+not provide the verdict they want evaluated.
+
+1. The caller supplies a persisted `storage_id`, stable `action_id`, and policy
+   ID (`healthy_only` or `trusted_completion`).
+2. `action_gate.ActionGate` reads the run through `TruthService.get_run()`.
+   This service read reevaluates aging, so an old healthy receipt can become
+   stale before authorization.
+3. The gate rejects a missing, malformed, unavailable, failed, contradictory,
+   or stale record. `healthy_only` also rejects verified no-work;
+   `trusted_completion` accepts it.
+4. The decision is bound to receipt, action, and policy. Inside the same
+   immediate SQLite transaction used to insert it, an allow is rechecked
+   against the latest stored verdict and freshness deadline. A concurrent
+   stale or contradictory transition therefore makes the insert fail closed.
+5. Only after the immutable `action_decisions` audit write succeeds does an
+   allowed decision return to the caller. Audit failure raises and blocks.
+6. The business workflow remains responsible for invoking its bounded,
+   idempotent action only when `authorized` is true.
+
+Decision-table update and delete triggers protect the audit trail. Exact
+decision retries are idempotent; conflicting reuse of a decision ID fails.
+
+## Data flow — credential-free verified business outcome
+
+`outcome_challenge` demonstrates the whole evidence-to-action chain without
+provider credentials:
+
+1. It creates a unique challenge directory and a separate local
+   `destination.sqlite` containing three generated, de-identified follow-up
+   rows.
+2. A new read-only SQLite connection selects and sorts those destination rows,
+   canonicalizes them, and measures count plus SHA-256.
+3. The 3 claimed → 3 observed receipt is persisted and evaluates `healthy`.
+4. `healthy_only` authorizes one bounded insert into a local outbox. Before
+   invoking it, the challenge reads the gate decision back and requires an
+   exact match to the returned receipt/action/policy/verdict decision.
+5. The challenge removes exactly one generated destination row.
+6. Another independent read-back observes 2 rows and a changed canonical hash.
+   The 3 claimed → 2 observed receipt evaluates
+   `degraded_contradictory`.
+7. The second gate decision is blocked; its action callback is not invoked, so
+   the local outbox count remains one.
+
+The phases are sequential by design: the first receipt, allowed action, row
+deletion, and second receipt describe a real chronology. Generated row payloads
+and absolute paths stay local. The HTTP response exposes only safe IDs,
+relative path, counts, hashes, verdicts, decisions, and action counts.
+
+## Mission Control capability graph
+
+`platform-registry-v1.json` is a data-only inventory that points each
+capability back to a repository path and symbol. Validation checks the schema,
+allowed status/setup/risk/approval/read-back values, duplicate IDs, declared
+counts, source paths, and accidental secret-like content before data reaches
+the UI/API.
+
+The v0.13 registry has 71 entries: 4 built-in agents, 20 LLM-facing tools,
+33 implemented/setup-required provider adapters (9 lead-source, 8
+verification, 6 sender, and 10 CRM), plus connector, channel, and model-route
+entries. Registry status is not connection status:
+
+- `native` means the implementation is part of this repository.
+- `implemented/setup_required` means code exists but external setup is needed.
+- `bridge/catalog` means only the integration seam/catalog is present.
+- `planned` is roadmap-only.
+
+Registry loading does not import provider modules, read environment variables
+or credentials, or contact external services.
 
 ## Data flow — one voice turn (ElevenLabs custom-LLM)
 

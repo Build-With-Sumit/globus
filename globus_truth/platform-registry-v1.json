@@ -1,0 +1,1161 @@
+{
+  "schema_version": "1.0",
+  "registry_id": "globus.platform",
+  "release": "0.13.0",
+  "description": "A source-backed inventory of Globus capabilities. Setup-required means code exists but does not imply that an account is connected or configured.",
+  "status_definitions": {
+    "native": "Implemented in this repository and usable without configuring an external provider for the capability itself.",
+    "implemented/setup_required": "An implementation exists in this repository, but an operator must configure the external account or service before use.",
+    "bridge/catalog": "Globus contains an integration surface for an operator-supplied bridge or external service; the bridge or service is not bundled as a native connected capability.",
+    "planned": "Shown for roadmap clarity only. The public repository does not currently ship an executable integration."
+  },
+  "claims": {
+    "built_in_agents": 4,
+    "llm_tools": 20,
+    "implemented_provider_adapters": 33,
+    "provider_adapter_categories": {
+      "lead_source": 9,
+      "verifier": 8,
+      "sender": 6,
+      "crm": 10
+    }
+  },
+  "capabilities": [
+    {
+      "id": "agent.research",
+      "kind": "agent",
+      "category": "automation",
+      "name": "Research",
+      "description": "Read-only research brief over member-scoped files, email, and message sources.",
+      "status": "native",
+      "setup": "none",
+      "risk": "low",
+      "approval": "operator_trigger",
+      "readback": "source_cited",
+      "source": {
+        "path": "server/globus_agents_catalog.py",
+        "symbol": "GLOBUS_AGENTS_CATALOG[research]"
+      }
+    },
+    {
+      "id": "agent.sales-desk",
+      "kind": "agent",
+      "category": "automation",
+      "name": "Sales Desk",
+      "description": "Read-only pipeline review that prepares follow-up drafts without sending them.",
+      "status": "native",
+      "setup": "none",
+      "risk": "low",
+      "approval": "operator_trigger",
+      "readback": "source_cited",
+      "source": {
+        "path": "server/globus_agents_catalog.py",
+        "symbol": "GLOBUS_AGENTS_CATALOG[sales-desk]"
+      }
+    },
+    {
+      "id": "agent.narada",
+      "kind": "agent",
+      "category": "automation",
+      "name": "Narada",
+      "description": "Outbound campaign agent with human-triggered sending and member-scoped provider adapters.",
+      "status": "native",
+      "setup": "none",
+      "risk": "high",
+      "approval": "explicit",
+      "readback": "provider_response",
+      "source": {
+        "path": "server/globus_agents_catalog.py",
+        "symbol": "GLOBUS_AGENTS_CATALOG[narada]"
+      }
+    },
+    {
+      "id": "agent.infra-watch",
+      "kind": "agent",
+      "category": "automation",
+      "name": "Infra Watch",
+      "description": "Infrastructure brief and optional allow-listed Telegram alert draft path.",
+      "status": "native",
+      "setup": "none",
+      "risk": "medium",
+      "approval": "operator_trigger",
+      "readback": "source_cited",
+      "source": {
+        "path": "server/globus_agents_catalog.py",
+        "symbol": "GLOBUS_AGENTS_CATALOG[infra-watch]"
+      }
+    },
+    {
+      "id": "tool.search_files",
+      "kind": "tool",
+      "category": "knowledge",
+      "name": "Search files",
+      "description": "Search member-scoped indexed files by filename keyword.",
+      "status": "native",
+      "setup": "none",
+      "risk": "low",
+      "approval": "none",
+      "readback": "source_cited",
+      "source": {
+        "path": "server/globus_tools_schema.py",
+        "symbol": "GLOBUS_TOOLS[search_files]"
+      }
+    },
+    {
+      "id": "tool.read_file",
+      "kind": "tool",
+      "category": "knowledge",
+      "name": "Read file",
+      "description": "Read a selected member-scoped indexed file and its metadata.",
+      "status": "native",
+      "setup": "none",
+      "risk": "low",
+      "approval": "none",
+      "readback": "source_cited",
+      "source": {
+        "path": "server/globus_tools_schema.py",
+        "symbol": "GLOBUS_TOOLS[read_file]"
+      }
+    },
+    {
+      "id": "tool.search_content",
+      "kind": "tool",
+      "category": "knowledge",
+      "name": "Search content",
+      "description": "Search text inside member-scoped indexed content.",
+      "status": "native",
+      "setup": "none",
+      "risk": "low",
+      "approval": "none",
+      "readback": "source_cited",
+      "source": {
+        "path": "server/globus_tools_schema.py",
+        "symbol": "GLOBUS_TOOLS[search_content]"
+      }
+    },
+    {
+      "id": "tool.list_recent_emails",
+      "kind": "tool",
+      "category": "knowledge",
+      "name": "List recent emails",
+      "description": "List recent email records already scoped to the signed-in member.",
+      "status": "native",
+      "setup": "none",
+      "risk": "low",
+      "approval": "none",
+      "readback": "source_cited",
+      "source": {
+        "path": "server/globus_tools_schema.py",
+        "symbol": "GLOBUS_TOOLS[list_recent_emails]"
+      }
+    },
+    {
+      "id": "tool.search_whatsapp",
+      "kind": "tool",
+      "category": "knowledge",
+      "name": "Search WhatsApp",
+      "description": "Search WhatsApp messages that have already been ingested for the member.",
+      "status": "native",
+      "setup": "none",
+      "risk": "low",
+      "approval": "none",
+      "readback": "source_cited",
+      "source": {
+        "path": "server/globus_tools_schema.py",
+        "symbol": "GLOBUS_TOOLS[search_whatsapp]"
+      }
+    },
+    {
+      "id": "tool.search_telegram",
+      "kind": "tool",
+      "category": "knowledge",
+      "name": "Search Telegram",
+      "description": "Search Telegram messages that have already been ingested for the member.",
+      "status": "native",
+      "setup": "none",
+      "risk": "low",
+      "approval": "none",
+      "readback": "source_cited",
+      "source": {
+        "path": "server/globus_tools_schema.py",
+        "symbol": "GLOBUS_TOOLS[search_telegram]"
+      }
+    },
+    {
+      "id": "tool.send_telegram_via_bot",
+      "kind": "tool",
+      "category": "communication",
+      "name": "Send Telegram via bot",
+      "description": "Send an explicitly requested message through a configured member bot.",
+      "status": "implemented/setup_required",
+      "setup": "api_key",
+      "risk": "high",
+      "approval": "explicit",
+      "readback": "provider_response",
+      "source": {
+        "path": "server/globus_tools_schema.py",
+        "symbol": "GLOBUS_TOOLS[send_telegram_via_bot]"
+      }
+    },
+    {
+      "id": "tool.run_agent",
+      "kind": "tool",
+      "category": "agent_control",
+      "name": "Run agent",
+      "description": "Start one of the built-in member-scoped agents.",
+      "status": "native",
+      "setup": "none",
+      "risk": "medium",
+      "approval": "operator_trigger",
+      "readback": "truth_receipt",
+      "source": {
+        "path": "server/globus_tools_schema.py",
+        "symbol": "GLOBUS_TOOLS[run_agent]"
+      }
+    },
+    {
+      "id": "tool.save_preference",
+      "kind": "tool",
+      "category": "memory",
+      "name": "Save preference",
+      "description": "Persist an explicit member preference.",
+      "status": "native",
+      "setup": "none",
+      "risk": "medium",
+      "approval": "operator_trigger",
+      "readback": "operation_result",
+      "source": {
+        "path": "server/globus_tools_schema.py",
+        "symbol": "GLOBUS_TOOLS[save_preference]"
+      }
+    },
+    {
+      "id": "tool.list_preferences",
+      "kind": "tool",
+      "category": "memory",
+      "name": "List preferences",
+      "description": "List member-scoped saved preferences.",
+      "status": "native",
+      "setup": "none",
+      "risk": "low",
+      "approval": "none",
+      "readback": "operation_result",
+      "source": {
+        "path": "server/globus_tools_schema.py",
+        "symbol": "GLOBUS_TOOLS[list_preferences]"
+      }
+    },
+    {
+      "id": "tool.delete_preference",
+      "kind": "tool",
+      "category": "memory",
+      "name": "Delete preference",
+      "description": "Delete a selected member-scoped saved preference.",
+      "status": "native",
+      "setup": "none",
+      "risk": "medium",
+      "approval": "operator_trigger",
+      "readback": "operation_result",
+      "source": {
+        "path": "server/globus_tools_schema.py",
+        "symbol": "GLOBUS_TOOLS[delete_preference]"
+      }
+    },
+    {
+      "id": "tool.web_read",
+      "kind": "tool",
+      "category": "web",
+      "name": "Web read",
+      "description": "Read a requested public web page through the bounded web reader.",
+      "status": "native",
+      "setup": "none",
+      "risk": "low",
+      "approval": "none",
+      "readback": "source_cited",
+      "source": {
+        "path": "server/globus_tools_schema.py",
+        "symbol": "GLOBUS_TOOLS[web_read]"
+      }
+    },
+    {
+      "id": "tool.narada_create_campaign",
+      "kind": "tool",
+      "category": "outbound",
+      "name": "Narada create campaign",
+      "description": "Create a member-scoped outbound campaign definition.",
+      "status": "native",
+      "setup": "none",
+      "risk": "medium",
+      "approval": "operator_trigger",
+      "readback": "operation_result",
+      "source": {
+        "path": "server/globus_tools_schema.py",
+        "symbol": "GLOBUS_TOOLS[narada_create_campaign]"
+      }
+    },
+    {
+      "id": "tool.narada_find_leads",
+      "kind": "tool",
+      "category": "outbound",
+      "name": "Narada find leads",
+      "description": "Run a selected configured lead-source adapter for a campaign.",
+      "status": "implemented/setup_required",
+      "setup": "external_service",
+      "risk": "medium",
+      "approval": "operator_trigger",
+      "readback": "provider_response",
+      "source": {
+        "path": "server/globus_tools_schema.py",
+        "symbol": "GLOBUS_TOOLS[narada_find_leads]"
+      }
+    },
+    {
+      "id": "tool.narada_draft_copy",
+      "kind": "tool",
+      "category": "outbound",
+      "name": "Narada draft copy",
+      "description": "Prepare campaign copy without sending it.",
+      "status": "native",
+      "setup": "none",
+      "risk": "low",
+      "approval": "operator_trigger",
+      "readback": "operation_result",
+      "source": {
+        "path": "server/globus_tools_schema.py",
+        "symbol": "GLOBUS_TOOLS[narada_draft_copy]"
+      }
+    },
+    {
+      "id": "tool.narada_send_campaign",
+      "kind": "tool",
+      "category": "outbound",
+      "name": "Narada send campaign",
+      "description": "Send approved campaign messages through the selected configured sender.",
+      "status": "implemented/setup_required",
+      "setup": "external_service",
+      "risk": "high",
+      "approval": "explicit",
+      "readback": "provider_response",
+      "source": {
+        "path": "server/globus_tools_schema.py",
+        "symbol": "GLOBUS_TOOLS[narada_send_campaign]"
+      }
+    },
+    {
+      "id": "tool.narada_check_replies",
+      "kind": "tool",
+      "category": "outbound",
+      "name": "Narada check replies",
+      "description": "Read replies reported by the selected configured sender.",
+      "status": "implemented/setup_required",
+      "setup": "external_service",
+      "risk": "low",
+      "approval": "operator_trigger",
+      "readback": "provider_response",
+      "source": {
+        "path": "server/globus_tools_schema.py",
+        "symbol": "GLOBUS_TOOLS[narada_check_replies]"
+      }
+    },
+    {
+      "id": "tool.narada_campaign_stats",
+      "kind": "tool",
+      "category": "outbound",
+      "name": "Narada campaign stats",
+      "description": "Read member-scoped campaign counts and status.",
+      "status": "native",
+      "setup": "none",
+      "risk": "low",
+      "approval": "none",
+      "readback": "operation_result",
+      "source": {
+        "path": "server/globus_tools_schema.py",
+        "symbol": "GLOBUS_TOOLS[narada_campaign_stats]"
+      }
+    },
+    {
+      "id": "tool.narada_list_campaigns",
+      "kind": "tool",
+      "category": "outbound",
+      "name": "Narada list campaigns",
+      "description": "List campaigns belonging to the signed-in member.",
+      "status": "native",
+      "setup": "none",
+      "risk": "low",
+      "approval": "none",
+      "readback": "operation_result",
+      "source": {
+        "path": "server/globus_tools_schema.py",
+        "symbol": "GLOBUS_TOOLS[narada_list_campaigns]"
+      }
+    },
+    {
+      "id": "tool.narada_list_plugins",
+      "kind": "tool",
+      "category": "outbound",
+      "name": "Narada list plugins",
+      "description": "List the Narada plugin implementations and their setup availability.",
+      "status": "native",
+      "setup": "none",
+      "risk": "low",
+      "approval": "none",
+      "readback": "operation_result",
+      "source": {
+        "path": "server/globus_tools_schema.py",
+        "symbol": "GLOBUS_TOOLS[narada_list_plugins]"
+      }
+    },
+    {
+      "id": "provider.apollo",
+      "kind": "provider_adapter",
+      "category": "lead_source",
+      "name": "Apollo.io",
+      "description": "Implemented lead-source adapter; external account setup is required before use.",
+      "status": "implemented/setup_required",
+      "setup": "api_key",
+      "risk": "medium",
+      "approval": "operator_trigger",
+      "readback": "provider_response",
+      "source": {
+        "path": "server/narada_plugins/apollo.py",
+        "symbol": "ApolloLeadSource"
+      }
+    },
+    {
+      "id": "provider.cognism",
+      "kind": "provider_adapter",
+      "category": "lead_source",
+      "name": "Cognism",
+      "description": "Implemented lead-source adapter; external account setup is required before use.",
+      "status": "implemented/setup_required",
+      "setup": "api_key",
+      "risk": "medium",
+      "approval": "operator_trigger",
+      "readback": "provider_response",
+      "source": {
+        "path": "server/narada_plugins/cognism.py",
+        "symbol": "CognismLeadSource"
+      }
+    },
+    {
+      "id": "provider.findymail",
+      "kind": "provider_adapter",
+      "category": "lead_source",
+      "name": "FindyMail",
+      "description": "Implemented lead-source adapter; external account setup is required before use.",
+      "status": "implemented/setup_required",
+      "setup": "api_key",
+      "risk": "medium",
+      "approval": "operator_trigger",
+      "readback": "provider_response",
+      "source": {
+        "path": "server/narada_plugins/findymail.py",
+        "symbol": "FindyMailLeadSource"
+      }
+    },
+    {
+      "id": "provider.hunter",
+      "kind": "provider_adapter",
+      "category": "lead_source",
+      "name": "Hunter.io",
+      "description": "Implemented lead-source adapter; external account setup is required before use.",
+      "status": "implemented/setup_required",
+      "setup": "api_key",
+      "risk": "medium",
+      "approval": "operator_trigger",
+      "readback": "provider_response",
+      "source": {
+        "path": "server/narada_plugins/hunter.py",
+        "symbol": "HunterLeadSource"
+      }
+    },
+    {
+      "id": "provider.lusha",
+      "kind": "provider_adapter",
+      "category": "lead_source",
+      "name": "Lusha",
+      "description": "Implemented lead-source adapter; external account setup is required before use.",
+      "status": "implemented/setup_required",
+      "setup": "api_key",
+      "risk": "medium",
+      "approval": "operator_trigger",
+      "readback": "provider_response",
+      "source": {
+        "path": "server/narada_plugins/lusha.py",
+        "symbol": "LushaLeadSource"
+      }
+    },
+    {
+      "id": "provider.prospeo",
+      "kind": "provider_adapter",
+      "category": "lead_source",
+      "name": "Prospeo",
+      "description": "Implemented lead-source adapter; external account setup is required before use.",
+      "status": "implemented/setup_required",
+      "setup": "api_key",
+      "risk": "medium",
+      "approval": "operator_trigger",
+      "readback": "provider_response",
+      "source": {
+        "path": "server/narada_plugins/prospeo.py",
+        "symbol": "ProspeoLeadSource"
+      }
+    },
+    {
+      "id": "provider.rocketreach",
+      "kind": "provider_adapter",
+      "category": "lead_source",
+      "name": "RocketReach",
+      "description": "Implemented lead-source adapter; external account setup is required before use.",
+      "status": "implemented/setup_required",
+      "setup": "api_key",
+      "risk": "medium",
+      "approval": "operator_trigger",
+      "readback": "provider_response",
+      "source": {
+        "path": "server/narada_plugins/rocketreach.py",
+        "symbol": "RocketReachLeadSource"
+      }
+    },
+    {
+      "id": "provider.uplead",
+      "kind": "provider_adapter",
+      "category": "lead_source",
+      "name": "UpLead",
+      "description": "Implemented lead-source adapter; external account setup is required before use.",
+      "status": "implemented/setup_required",
+      "setup": "api_key",
+      "risk": "medium",
+      "approval": "operator_trigger",
+      "readback": "provider_response",
+      "source": {
+        "path": "server/narada_plugins/uplead.py",
+        "symbol": "UpLeadLeadSource"
+      }
+    },
+    {
+      "id": "provider.zoominfo",
+      "kind": "provider_adapter",
+      "category": "lead_source",
+      "name": "ZoomInfo",
+      "description": "Implemented lead-source adapter; external account setup is required before use.",
+      "status": "implemented/setup_required",
+      "setup": "api_key",
+      "risk": "medium",
+      "approval": "operator_trigger",
+      "readback": "provider_response",
+      "source": {
+        "path": "server/narada_plugins/zoominfo.py",
+        "symbol": "ZoomInfoLeadSource"
+      }
+    },
+    {
+      "id": "provider.bouncer",
+      "kind": "provider_adapter",
+      "category": "verifier",
+      "name": "Bouncer",
+      "description": "Implemented email-verification adapter; external account setup is required before use.",
+      "status": "implemented/setup_required",
+      "setup": "api_key",
+      "risk": "low",
+      "approval": "operator_trigger",
+      "readback": "provider_response",
+      "source": {
+        "path": "server/narada_plugins/bouncer.py",
+        "symbol": "BouncerVerifier"
+      }
+    },
+    {
+      "id": "provider.debounce",
+      "kind": "provider_adapter",
+      "category": "verifier",
+      "name": "DeBounce",
+      "description": "Implemented email-verification adapter; external account setup is required before use.",
+      "status": "implemented/setup_required",
+      "setup": "api_key",
+      "risk": "low",
+      "approval": "operator_trigger",
+      "readback": "provider_response",
+      "source": {
+        "path": "server/narada_plugins/debounce.py",
+        "symbol": "DeBounceVerifier"
+      }
+    },
+    {
+      "id": "provider.emaillistverify",
+      "kind": "provider_adapter",
+      "category": "verifier",
+      "name": "EmailListVerify",
+      "description": "Implemented email-verification adapter; external account setup is required before use.",
+      "status": "implemented/setup_required",
+      "setup": "api_key",
+      "risk": "low",
+      "approval": "operator_trigger",
+      "readback": "provider_response",
+      "source": {
+        "path": "server/narada_plugins/emaillistverify.py",
+        "symbol": "EmailListVerifyVerifier"
+      }
+    },
+    {
+      "id": "provider.mailercheck",
+      "kind": "provider_adapter",
+      "category": "verifier",
+      "name": "MailerCheck",
+      "description": "Implemented email-verification adapter; external account setup is required before use.",
+      "status": "implemented/setup_required",
+      "setup": "api_key",
+      "risk": "low",
+      "approval": "operator_trigger",
+      "readback": "provider_response",
+      "source": {
+        "path": "server/narada_plugins/mailercheck.py",
+        "symbol": "MailerCheckVerifier"
+      }
+    },
+    {
+      "id": "provider.millionverifier",
+      "kind": "provider_adapter",
+      "category": "verifier",
+      "name": "MillionVerifier",
+      "description": "Implemented email-verification adapter; external account setup is required before use.",
+      "status": "implemented/setup_required",
+      "setup": "api_key",
+      "risk": "low",
+      "approval": "operator_trigger",
+      "readback": "provider_response",
+      "source": {
+        "path": "server/narada_plugins/millionverifier.py",
+        "symbol": "MillionVerifierVerifier"
+      }
+    },
+    {
+      "id": "provider.neverbounce",
+      "kind": "provider_adapter",
+      "category": "verifier",
+      "name": "NeverBounce",
+      "description": "Implemented email-verification adapter; external account setup is required before use.",
+      "status": "implemented/setup_required",
+      "setup": "api_key",
+      "risk": "low",
+      "approval": "operator_trigger",
+      "readback": "provider_response",
+      "source": {
+        "path": "server/narada_plugins/neverbounce.py",
+        "symbol": "NeverBounceVerifier"
+      }
+    },
+    {
+      "id": "provider.prospeo_verify",
+      "kind": "provider_adapter",
+      "category": "verifier",
+      "name": "Prospeo Email Verify",
+      "description": "Implemented email-verification adapter; external account setup is required before use.",
+      "status": "implemented/setup_required",
+      "setup": "api_key",
+      "risk": "low",
+      "approval": "operator_trigger",
+      "readback": "provider_response",
+      "source": {
+        "path": "server/narada_plugins/prospeo.py",
+        "symbol": "ProspeoVerifier"
+      }
+    },
+    {
+      "id": "provider.zerobounce",
+      "kind": "provider_adapter",
+      "category": "verifier",
+      "name": "ZeroBounce",
+      "description": "Implemented email-verification adapter; external account setup is required before use.",
+      "status": "implemented/setup_required",
+      "setup": "api_key",
+      "risk": "low",
+      "approval": "operator_trigger",
+      "readback": "provider_response",
+      "source": {
+        "path": "server/narada_plugins/zerobounce.py",
+        "symbol": "ZeroBounceVerifier"
+      }
+    },
+    {
+      "id": "provider.emailbison",
+      "kind": "provider_adapter",
+      "category": "sender",
+      "name": "EmailBison",
+      "description": "Implemented outbound sender adapter; external account setup and explicit send approval are required.",
+      "status": "implemented/setup_required",
+      "setup": "api_key",
+      "risk": "high",
+      "approval": "explicit",
+      "readback": "provider_response",
+      "source": {
+        "path": "server/narada_plugins/emailbison.py",
+        "symbol": "EmailBisonSender"
+      }
+    },
+    {
+      "id": "provider.gmail",
+      "kind": "provider_adapter",
+      "category": "sender",
+      "name": "Gmail via Composio",
+      "description": "Implemented managed-OAuth sender adapter; an external Composio connection and explicit send approval are required.",
+      "status": "implemented/setup_required",
+      "setup": "managed_oauth",
+      "risk": "high",
+      "approval": "explicit",
+      "readback": "provider_response",
+      "source": {
+        "path": "server/narada_plugins/gmail_composio.py",
+        "symbol": "GmailComposioSender"
+      }
+    },
+    {
+      "id": "provider.gmail_oauth",
+      "kind": "provider_adapter",
+      "category": "sender",
+      "name": "Gmail connected account",
+      "description": "Implemented custom-OAuth sender adapter; a Google account connection and explicit send approval are required.",
+      "status": "implemented/setup_required",
+      "setup": "custom_oauth",
+      "risk": "high",
+      "approval": "explicit",
+      "readback": "provider_response",
+      "source": {
+        "path": "server/narada_plugins/gmail_oauth.py",
+        "symbol": "GmailOAuthSender"
+      }
+    },
+    {
+      "id": "provider.instantly",
+      "kind": "provider_adapter",
+      "category": "sender",
+      "name": "Instantly",
+      "description": "Implemented outbound sender adapter; external account setup and explicit send approval are required.",
+      "status": "implemented/setup_required",
+      "setup": "api_key",
+      "risk": "high",
+      "approval": "explicit",
+      "readback": "provider_response",
+      "source": {
+        "path": "server/narada_plugins/instantly.py",
+        "symbol": "InstantlySender"
+      }
+    },
+    {
+      "id": "provider.lemlist",
+      "kind": "provider_adapter",
+      "category": "sender",
+      "name": "Lemlist",
+      "description": "Implemented outbound sender adapter; external account setup and explicit send approval are required.",
+      "status": "implemented/setup_required",
+      "setup": "api_key",
+      "risk": "high",
+      "approval": "explicit",
+      "readback": "provider_response",
+      "source": {
+        "path": "server/narada_plugins/lemlist.py",
+        "symbol": "LemlistSender"
+      }
+    },
+    {
+      "id": "provider.smartlead",
+      "kind": "provider_adapter",
+      "category": "sender",
+      "name": "Smartlead",
+      "description": "Implemented outbound sender adapter; external account setup and explicit send approval are required.",
+      "status": "implemented/setup_required",
+      "setup": "api_key",
+      "risk": "high",
+      "approval": "explicit",
+      "readback": "provider_response",
+      "source": {
+        "path": "server/narada_plugins/smartlead.py",
+        "symbol": "SmartleadSender"
+      }
+    },
+    {
+      "id": "provider.attio",
+      "kind": "provider_adapter",
+      "category": "crm",
+      "name": "Attio",
+      "description": "Implemented CRM write adapter; external account setup and explicit write approval are required.",
+      "status": "implemented/setup_required",
+      "setup": "api_key",
+      "risk": "high",
+      "approval": "explicit",
+      "readback": "provider_response",
+      "source": {
+        "path": "server/narada_plugins/attio.py",
+        "symbol": "AttioCRM"
+      }
+    },
+    {
+      "id": "provider.close",
+      "kind": "provider_adapter",
+      "category": "crm",
+      "name": "Close",
+      "description": "Implemented CRM write adapter; external account setup and explicit write approval are required.",
+      "status": "implemented/setup_required",
+      "setup": "api_key",
+      "risk": "high",
+      "approval": "explicit",
+      "readback": "provider_response",
+      "source": {
+        "path": "server/narada_plugins/close.py",
+        "symbol": "CloseCRM"
+      }
+    },
+    {
+      "id": "provider.copper",
+      "kind": "provider_adapter",
+      "category": "crm",
+      "name": "Copper",
+      "description": "Implemented CRM write adapter; external account setup and explicit write approval are required.",
+      "status": "implemented/setup_required",
+      "setup": "api_key",
+      "risk": "high",
+      "approval": "explicit",
+      "readback": "provider_response",
+      "source": {
+        "path": "server/narada_plugins/copper.py",
+        "symbol": "CopperCRM"
+      }
+    },
+    {
+      "id": "provider.folk",
+      "kind": "provider_adapter",
+      "category": "crm",
+      "name": "Folk",
+      "description": "Implemented CRM write adapter; external account setup and explicit write approval are required.",
+      "status": "implemented/setup_required",
+      "setup": "api_key",
+      "risk": "high",
+      "approval": "explicit",
+      "readback": "provider_response",
+      "source": {
+        "path": "server/narada_plugins/folk.py",
+        "symbol": "FolkCRM"
+      }
+    },
+    {
+      "id": "provider.freshsales",
+      "kind": "provider_adapter",
+      "category": "crm",
+      "name": "Freshsales",
+      "description": "Implemented CRM write adapter; external account setup and explicit write approval are required.",
+      "status": "implemented/setup_required",
+      "setup": "api_key",
+      "risk": "high",
+      "approval": "explicit",
+      "readback": "provider_response",
+      "source": {
+        "path": "server/narada_plugins/freshsales.py",
+        "symbol": "FreshsalesCRM"
+      }
+    },
+    {
+      "id": "provider.hubspot",
+      "kind": "provider_adapter",
+      "category": "crm",
+      "name": "HubSpot",
+      "description": "Implemented CRM write adapter; external account setup and explicit write approval are required.",
+      "status": "implemented/setup_required",
+      "setup": "api_key",
+      "risk": "high",
+      "approval": "explicit",
+      "readback": "provider_response",
+      "source": {
+        "path": "server/narada_plugins/hubspot.py",
+        "symbol": "HubSpotCRM"
+      }
+    },
+    {
+      "id": "provider.monday_sales_crm",
+      "kind": "provider_adapter",
+      "category": "crm",
+      "name": "Monday Sales CRM",
+      "description": "Implemented CRM write adapter; external account setup and explicit write approval are required.",
+      "status": "implemented/setup_required",
+      "setup": "api_key",
+      "risk": "high",
+      "approval": "explicit",
+      "readback": "provider_response",
+      "source": {
+        "path": "server/narada_plugins/monday_sales_crm.py",
+        "symbol": "MondaySalesCRM"
+      }
+    },
+    {
+      "id": "provider.pipedrive",
+      "kind": "provider_adapter",
+      "category": "crm",
+      "name": "Pipedrive",
+      "description": "Implemented CRM write adapter; external account setup and explicit write approval are required.",
+      "status": "implemented/setup_required",
+      "setup": "api_key",
+      "risk": "high",
+      "approval": "explicit",
+      "readback": "provider_response",
+      "source": {
+        "path": "server/narada_plugins/pipedrive.py",
+        "symbol": "PipedriveCRM"
+      }
+    },
+    {
+      "id": "provider.salesforce",
+      "kind": "provider_adapter",
+      "category": "crm",
+      "name": "Salesforce",
+      "description": "Implemented CRM write adapter; external account setup and explicit write approval are required.",
+      "status": "implemented/setup_required",
+      "setup": "api_key",
+      "risk": "high",
+      "approval": "explicit",
+      "readback": "provider_response",
+      "source": {
+        "path": "server/narada_plugins/salesforce.py",
+        "symbol": "SalesforceCRM"
+      }
+    },
+    {
+      "id": "provider.zoho_crm",
+      "kind": "provider_adapter",
+      "category": "crm",
+      "name": "Zoho CRM",
+      "description": "Implemented CRM write adapter; external account setup and explicit write approval are required.",
+      "status": "implemented/setup_required",
+      "setup": "api_key",
+      "risk": "high",
+      "approval": "explicit",
+      "readback": "provider_response",
+      "source": {
+        "path": "server/narada_plugins/zoho_crm.py",
+        "symbol": "ZohoCRM"
+      }
+    },
+    {
+      "id": "connector.obsidian_zip",
+      "kind": "connector",
+      "category": "knowledge_source",
+      "name": "Obsidian ZIP upload",
+      "description": "Native bounded extraction and ingestion of Markdown files from an uploaded Obsidian ZIP.",
+      "status": "native",
+      "setup": "none",
+      "risk": "low",
+      "approval": "operator_trigger",
+      "readback": "operation_result",
+      "source": {
+        "path": "server/globus_server.py",
+        "symbol": "POST /members/globus/upload source=obsidian-zip"
+      }
+    },
+    {
+      "id": "connector.markdown_paste",
+      "kind": "connector",
+      "category": "knowledge_source",
+      "name": "Markdown paste",
+      "description": "Native bounded ingestion of member-provided Markdown text.",
+      "status": "native",
+      "setup": "none",
+      "risk": "low",
+      "approval": "operator_trigger",
+      "readback": "operation_result",
+      "source": {
+        "path": "server/globus_server.py",
+        "symbol": "POST /members/globus/upload source=paste"
+      }
+    },
+    {
+      "id": "connector.google_drive",
+      "kind": "connector",
+      "category": "knowledge_source",
+      "name": "Google Drive",
+      "description": "Implemented read-oriented Drive discovery, extraction, indexing, and background synchronization.",
+      "status": "implemented/setup_required",
+      "setup": "google_oauth",
+      "risk": "low",
+      "approval": "operator_trigger",
+      "readback": "source_cited",
+      "source": {
+        "path": "server/sync_drive.py",
+        "symbol": "sync_drive_connection"
+      }
+    },
+    {
+      "id": "connector.gmail",
+      "kind": "connector",
+      "category": "knowledge_source",
+      "name": "Gmail vault sync",
+      "description": "Implemented read-oriented full and incremental Gmail synchronization.",
+      "status": "implemented/setup_required",
+      "setup": "google_oauth",
+      "risk": "low",
+      "approval": "operator_trigger",
+      "readback": "source_cited",
+      "source": {
+        "path": "server/sync_gmail.py",
+        "symbol": "sync_gmail_connection"
+      }
+    },
+    {
+      "id": "connector.whatsapp_web",
+      "kind": "connector",
+      "category": "message_source",
+      "name": "WhatsApp Web bridge",
+      "description": "Read-only ingest endpoint for the separately operated Chrome extension bridge.",
+      "status": "bridge/catalog",
+      "setup": "operator_bridge",
+      "risk": "low",
+      "approval": "operator_trigger",
+      "readback": "source_cited",
+      "source": {
+        "path": "server/bridge_ingest.py",
+        "symbol": "whatsapp_ingest_messages"
+      }
+    },
+    {
+      "id": "connector.microsoft_teams_bridge",
+      "kind": "connector",
+      "category": "message_source",
+      "name": "Microsoft Teams browser bridge",
+      "description": "Read-only ingest endpoint for Teams personal data collected by the separately operated Chrome extension bridge.",
+      "status": "bridge/catalog",
+      "setup": "operator_bridge",
+      "risk": "low",
+      "approval": "operator_trigger",
+      "readback": "source_cited",
+      "source": {
+        "path": "server/bridge_ingest.py",
+        "symbol": "teams_ingest_messages"
+      }
+    },
+    {
+      "id": "connector.telegram_personal",
+      "kind": "connector",
+      "category": "message_source",
+      "name": "Telegram personal ingest",
+      "description": "Roadmap entry only: the public repository does not ship the multi-tenant Telethon ingest daemon.",
+      "status": "planned",
+      "setup": "not_available",
+      "risk": "low",
+      "approval": "none",
+      "readback": "none",
+      "source": {
+        "path": "server/connectors_html.py",
+        "symbol": "telegram_setup_html"
+      }
+    },
+    {
+      "id": "channel.members_text_chat",
+      "kind": "channel",
+      "category": "chat",
+      "name": "Members text chat",
+      "description": "Authenticated member chat with tool-use and source-aware responses.",
+      "status": "native",
+      "setup": "none",
+      "risk": "medium",
+      "approval": "operator_trigger",
+      "readback": "source_cited",
+      "source": {
+        "path": "server/globus_server.py",
+        "symbol": "POST /members/globus/chat"
+      }
+    },
+    {
+      "id": "channel.public_text_chat",
+      "kind": "channel",
+      "category": "chat",
+      "name": "Public text chat",
+      "description": "Bounded public chat path with rate limits, spend caps, and no member-private tools.",
+      "status": "native",
+      "setup": "none",
+      "risk": "medium",
+      "approval": "operator_trigger",
+      "readback": "operation_result",
+      "source": {
+        "path": "server/public_chat.py",
+        "symbol": "public_chat_send"
+      }
+    },
+    {
+      "id": "channel.elevenlabs_voice",
+      "kind": "channel",
+      "category": "voice",
+      "name": "ElevenLabs voice",
+      "description": "OpenAI-shaped custom-LLM endpoint used by an externally configured ElevenLabs voice agent.",
+      "status": "bridge/catalog",
+      "setup": "external_service",
+      "risk": "medium",
+      "approval": "operator_trigger",
+      "readback": "operation_result",
+      "source": {
+        "path": "server/voice_route.py",
+        "symbol": "voice_chat_handle"
+      }
+    },
+    {
+      "id": "channel.telegram_bot",
+      "kind": "channel",
+      "category": "notification",
+      "name": "Telegram Bot notifications",
+      "description": "Implemented outbound bot path with member ownership checks and provider acknowledgement.",
+      "status": "implemented/setup_required",
+      "setup": "api_key",
+      "risk": "high",
+      "approval": "explicit",
+      "readback": "provider_response",
+      "source": {
+        "path": "server/telegram_bot.py",
+        "symbol": "send_via_member_bot"
+      }
+    },
+    {
+      "id": "model.claude_oauth_bridge",
+      "kind": "model_route",
+      "category": "llm",
+      "name": "Claude OAuth-compatible loopback bridge",
+      "description": "OpenAI-compatible loopback route for an operator-supplied local Claude bridge.",
+      "status": "bridge/catalog",
+      "setup": "operator_bridge",
+      "risk": "medium",
+      "approval": "operator_trigger",
+      "readback": "provider_response",
+      "source": {
+        "path": "server/globus_llm.py",
+        "symbol": "globus_call_claude_oauth"
+      }
+    },
+    {
+      "id": "model.anthropic_direct",
+      "kind": "model_route",
+      "category": "llm",
+      "name": "Anthropic API direct",
+      "description": "Implemented direct Anthropic Messages API route, also used as the configured Claude fallback.",
+      "status": "implemented/setup_required",
+      "setup": "api_key",
+      "risk": "medium",
+      "approval": "operator_trigger",
+      "readback": "provider_response",
+      "source": {
+        "path": "server/globus_llm.py",
+        "symbol": "globus_call_claude_raw"
+      }
+    },
+    {
+      "id": "model.deepseek_direct",
+      "kind": "model_route",
+      "category": "llm",
+      "name": "DeepSeek direct",
+      "description": "Implemented OpenAI-compatible DeepSeek chat-completions route available by explicit provider selection.",
+      "status": "implemented/setup_required",
+      "setup": "api_key",
+      "risk": "medium",
+      "approval": "operator_trigger",
+      "readback": "provider_response",
+      "source": {
+        "path": "server/globus_llm.py",
+        "symbol": "globus_call_deepseek_chat"
+      }
+    }
+  ]
+}

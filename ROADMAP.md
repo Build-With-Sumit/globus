@@ -11,7 +11,7 @@ Shipped:
   per-member-isolated.
 - ✅ Config templates (`.env.example`, `persona.example.md`).
 - ✅ Generic example agents catalog (`globus_agents_catalog.py` ships
-  Research / Sales Desk / Infra Watch — replace with yours).
+  Research / Sales Desk / Narada / Infra Watch — replace with yours).
 - ✅ Install docs (`INSTALL.md`) covering MySQL, .env, LLM provider
   choice, systemd unit.
 - ✅ Architecture docs (`ARCHITECTURE.md`) — module map, data flow,
@@ -511,7 +511,7 @@ without a human reading them is not a thing this project should hand out. What
 generalises — and what's here — is the record-keeping and the reply
 classification.
 
-## v0.12 (current) — Agent Truth Layer + Evidence Lab
+## v0.12 — Agent Truth Layer + Evidence Lab
 
 The public AgentRunner now separates verified work from process completion
 instead of equating a successful model call with successful work.
@@ -538,9 +538,87 @@ instead of equating a successful model call with successful work.
   byte, then re-verifies it as contradictory. It needs no model, account,
   credential, Docker runtime, or external network call.
 - ✅ **Judge-ready verification.** `python scripts/test_all.py` runs every
-  repository check in isolation; the Truth Layer itself has 60 hermetic tests.
+  repository check in isolation, including the hermetic Truth Layer suite.
 - 📄 See [`globus_truth/README.md`](globus_truth/README.md) and
   [`docs/TRUTH_LAYER_BUILD_STORY.md`](docs/TRUTH_LAYER_BUILD_STORY.md).
+
+## v0.13 (current) — Mission Control + verified Action Gate
+
+v0.13 turns the standalone Truth dashboard into the first Mission Control
+surface for a verified AgentOS. It deliberately prioritizes an inspectable,
+fail-closed control path over a large but unverifiable integration count.
+
+- ✅ **Source-backed capability registry.** A versioned, packaged JSON registry
+  describes 71 capabilities with source paths, setup requirements, risk,
+  approval, and read-back metadata: 4 built-in agents, 20 LLM-facing tools,
+  33 implemented/setup-required provider adapters, and
+  connector/channel/model-route entries. The provider adapter split is 9
+  lead-source, 8 verification, 6 sender, and 10 CRM adapters.
+- ✅ **Honest availability states.** `native`,
+  `implemented/setup_required`, `bridge/catalog`, and `planned` are distinct.
+  An implemented adapter is not presented as connected or configured.
+- ✅ **Fail-closed Action Gate.** A caller supplies only a persisted receipt ID,
+  stable action ID, and policy. The gate reads the current persisted verdict
+  itself, reevaluates freshness through the service, binds the decision to that
+  receipt/action/policy, atomically rechecks any allow against the latest
+  verdict and freshness deadline, and writes an immutable audit record before
+  returning. Missing, malformed, unavailable, failed, contradictory, stale, or
+  concurrently expired evidence all block.
+- ✅ **Two explicit policies.** `healthy_only` permits only a healthy receipt.
+  `trusted_completion` permits healthy or verified no-work. A failed audit
+  write cannot authorize an action.
+- ✅ **Credential-free business-outcome proof.** A generated workflow writes
+  three de-identified follow-up rows to a separate local SQLite destination,
+  reopens and hashes the destination through an independent connection, and
+  produces a healthy 3 → 3 receipt. The gate authorizes one bounded local
+  outbox insert only after the exact audit decision is read back. After exactly
+  one destination row is removed, the second
+  read-back produces a contradictory 3 → 2 receipt; the gate blocks and the
+  second callback is not invoked.
+- ✅ **No hidden services in the judge path.** The outcome challenge uses no
+  LLM, MySQL, API key, provider account, Docker runtime, or external call.
+  The original one-byte Evidence Lab remains available.
+- 📄 See [`globus_truth/README.md`](globus_truth/README.md) and
+  [`docs/TRUTH_LAYER_BUILD_STORY.md`](docs/TRUTH_LAYER_BUILD_STORY.md).
+
+### 30/60/90-day path toward a verified AgentOS
+
+This is a direction, not a claim of OpenClaw parity.
+
+**Next 30 days — make the control plane operational**
+
+- [ ] Derive tool dispatch and agent grants from one typed capability source so
+  catalog declarations and runtime enforcement cannot drift.
+- [ ] Add per-member installation state and health checks, while keeping
+  “implemented” separate from “connected.”
+- [ ] Apply Action Gate receipts to one reversible, production-shaped workflow
+  with explicit approval, idempotency keys, destination read-back, and audit
+  export.
+- [ ] Add proper versioned migrations for both MySQL and Truth SQLite state.
+
+**Next 60 days — add a narrow, safe extension SDK**
+
+- [ ] Define a signed plugin manifest and isolated tool/connector protocol with
+  declared permissions, secret requirements, risk, approval mode, and
+  read-back contract.
+- [ ] Add durable workflow state: queued runs, retries, leases, cancellation,
+  resumability, and operator-visible checkpoints.
+- [ ] Add policy scopes at organization, member, agent, tool, destination, and
+  data-source levels, plus a human-approval inbox for high-risk actions.
+- [ ] Ship a small set of well-tested first-party channel/connectors through the
+  same contract rather than claiming every catalog entry is live.
+
+**Next 90 days — grow an evidence-first ecosystem**
+
+- [ ] Publish a compatibility kit and conformance tests for third-party
+  adapters, including simulated provider failures and mandatory action
+  read-back.
+- [ ] Add signed registry distribution, provenance, revocation, sandboxing, and
+  install-time permission review.
+- [ ] Add multi-agent delegation with explicit capability grants, bounded
+  budgets, traceable hand-offs, and Truth receipts at each consequential step.
+- [ ] Add encrypted secret management, audit export, retention controls, and
+  deployment hardening before describing the platform as production-ready.
 
 ## v1.0 — production-ready
 

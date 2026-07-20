@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sqlite3
 import threading
 from contextlib import closing
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
@@ -20,6 +22,32 @@ _VERDICTS = {
     "stale",
 }
 _MAX_REEVALUATIONS_PER_READ = 500
+_ACTION_POLICIES = {"healthy_only", "trusted_completion"}
+_ACTION_OBSERVED_VERDICTS = _VERDICTS | {
+    "missing",
+    "malformed",
+    "unavailable",
+}
+_ACTION_DECISION_FIELDS = {
+    "decision_id",
+    "storage_id",
+    "action_id",
+    "policy_id",
+    "observed_verdict",
+    "authorized",
+    "reason_codes",
+    "decided_at",
+}
+_ACTION_BLOCK_REASONS = {
+    "verified_no_work": "policy_requires_healthy",
+    "degraded_contradictory": "verdict_contradictory",
+    "failed": "verdict_failed",
+    "stale": "verdict_stale",
+    "missing": "truth_record_missing",
+    "malformed": "truth_record_malformed",
+    "unavailable": "truth_lookup_failed",
+}
+_SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _Reevaluator = Callable[
     [Mapping[str, Any], str],
     tuple[Mapping[str, Any], str | None],
@@ -28,6 +56,10 @@ _Reevaluator = Callable[
 
 class ReceiptConflict(ValueError):
     """Raised when a receipt ID is reused with different content."""
+
+
+class ActionDecisionConflict(ValueError):
+    """Raised when an action decision ID is reused with different content."""
 
 
 def _canonical_json(value: Any) -> str:
@@ -120,6 +152,78 @@ class TruthRepository:
                 );
                 CREATE INDEX IF NOT EXISTS idx_verdicts_storage
                     ON verdicts(storage_id, id DESC);
+
+                CREATE TABLE IF NOT EXISTS action_decisions (
+                    decision_id TEXT PRIMARY KEY,
+                    storage_id TEXT NOT NULL,
+                    action_id TEXT NOT NULL,
+                    policy_id TEXT NOT NULL CHECK (
+                        policy_id IN ('healthy_only', 'trusted_completion')
+                    ),
+                    observed_verdict TEXT NOT NULL CHECK (
+                        observed_verdict IN (
+                            'healthy',
+                            'verified_no_work',
+                            'degraded_contradictory',
+                            'failed',
+                            'stale',
+                            'missing',
+                            'malformed',
+                            'unavailable'
+                        )
+                    ),
+                    authorized INTEGER NOT NULL CHECK (authorized IN (0, 1)),
+                    reason_codes_json TEXT NOT NULL,
+                    decided_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_action_decisions_storage
+                    ON action_decisions(storage_id, decided_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_action_decisions_recent
+                    ON action_decisions(decided_at DESC, decision_id DESC);
+                CREATE TRIGGER IF NOT EXISTS action_decisions_no_update
+                    BEFORE UPDATE ON action_decisions
+                    BEGIN
+                        SELECT RAISE(ABORT, 'action decisions are immutable');
+                    END;
+                CREATE TRIGGER IF NOT EXISTS action_decisions_no_delete
+                    BEFORE DELETE ON action_decisions
+                    BEGIN
+                        SELECT RAISE(ABORT, 'action decisions are immutable');
+                    END;
+                CREATE TRIGGER IF NOT EXISTS action_decisions_consistent_insert
+                    BEFORE INSERT ON action_decisions
+                    WHEN
+                        NEW.authorized != CASE
+                            WHEN NEW.observed_verdict = 'healthy' THEN 1
+                            WHEN NEW.observed_verdict = 'verified_no_work'
+                                 AND NEW.policy_id = 'trusted_completion' THEN 1
+                            ELSE 0
+                        END
+                        OR NEW.reason_codes_json != CASE
+                            WHEN NEW.observed_verdict = 'healthy'
+                                THEN '["policy_satisfied"]'
+                            WHEN NEW.observed_verdict = 'verified_no_work'
+                                 AND NEW.policy_id = 'trusted_completion'
+                                THEN '["policy_satisfied"]'
+                            WHEN NEW.observed_verdict = 'verified_no_work'
+                                THEN '["policy_requires_healthy"]'
+                            WHEN NEW.observed_verdict = 'degraded_contradictory'
+                                THEN '["verdict_contradictory"]'
+                            WHEN NEW.observed_verdict = 'failed'
+                                THEN '["verdict_failed"]'
+                            WHEN NEW.observed_verdict = 'stale'
+                                THEN '["verdict_stale"]'
+                            WHEN NEW.observed_verdict = 'missing'
+                                THEN '["truth_record_missing"]'
+                            WHEN NEW.observed_verdict = 'malformed'
+                                THEN '["truth_record_malformed"]'
+                            WHEN NEW.observed_verdict = 'unavailable'
+                                THEN '["truth_lookup_failed"]'
+                            ELSE ''
+                        END
+                    BEGIN
+                        SELECT RAISE(ABORT, 'inconsistent action decision');
+                    END;
                 """
             )
             columns = {
@@ -134,6 +238,256 @@ class TruthRepository:
                     ON verdicts(verdict, fresh_until)
                 """
             )
+
+    @staticmethod
+    def _validate_action_decision(
+        decision: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Return a normalized, privacy-safe action decision.
+
+        The exact field allowlist prevents callers from accidentally placing
+        receipt bodies, prompts, credentials, or destination payloads in the
+        authorization audit log.
+        """
+
+        if not isinstance(decision, Mapping) or set(decision) != _ACTION_DECISION_FIELDS:
+            raise ValueError("action decision contains unsupported fields")
+        normalized: dict[str, Any] = {}
+        for field in ("decision_id", "storage_id", "action_id"):
+            value = decision.get(field)
+            if not isinstance(value, str) or not _SAFE_ID_RE.fullmatch(value):
+                raise ValueError(f"{field} must be a safe 1-128 character identifier")
+            normalized[field] = value
+
+        policy_id = decision.get("policy_id")
+        if policy_id not in _ACTION_POLICIES:
+            raise ValueError("unsupported action policy")
+        normalized["policy_id"] = policy_id
+
+        observed_verdict = decision.get("observed_verdict")
+        if observed_verdict not in _ACTION_OBSERVED_VERDICTS:
+            raise ValueError("unsupported observed verdict")
+        normalized["observed_verdict"] = observed_verdict
+
+        authorized = decision.get("authorized")
+        if not isinstance(authorized, bool):
+            raise ValueError("authorized must be a boolean")
+        normalized["authorized"] = authorized
+
+        reason_codes = decision.get("reason_codes")
+        if (
+            not isinstance(reason_codes, (list, tuple))
+            or not 1 <= len(reason_codes) <= 16
+            or any(
+                not isinstance(code, str) or not _SAFE_ID_RE.fullmatch(code)
+                for code in reason_codes
+            )
+        ):
+            raise ValueError("reason_codes must contain 1-16 safe identifiers")
+        normalized["reason_codes"] = list(reason_codes)
+
+        expected_authorized = (
+            observed_verdict == "healthy"
+            or (
+                observed_verdict == "verified_no_work"
+                and policy_id == "trusted_completion"
+            )
+        )
+        expected_reason = (
+            "policy_satisfied"
+            if expected_authorized
+            else _ACTION_BLOCK_REASONS[observed_verdict]
+        )
+        if authorized is not expected_authorized:
+            raise ValueError("action decision authorization is inconsistent")
+        if normalized["reason_codes"] != [expected_reason]:
+            raise ValueError("action decision reason code is inconsistent")
+
+        decided_at = decision.get("decided_at")
+        if not isinstance(decided_at, str) or not decided_at or len(decided_at) > 40:
+            raise ValueError("decided_at must be an RFC 3339 timestamp")
+        timestamp = decided_at[:-1] + "+00:00" if decided_at.endswith("Z") else decided_at
+        try:
+            parsed = datetime.fromisoformat(timestamp)
+        except ValueError as exc:
+            raise ValueError("decided_at must be an RFC 3339 timestamp") from exc
+        if parsed.tzinfo is None:
+            raise ValueError("decided_at must include a timezone")
+        normalized["decided_at"] = (
+            parsed.astimezone(timezone.utc)
+            .isoformat(timespec="microseconds")
+            .replace("+00:00", "Z")
+        )
+        return normalized
+
+    def save_action_decision(self, decision: Mapping[str, Any]) -> bool:
+        """Persist one immutable, privacy-safe authorization decision.
+
+        Exact retries are idempotent. Reusing a decision ID for any different
+        content raises :class:`ActionDecisionConflict`.
+        """
+
+        item = self._validate_action_decision(decision)
+        reason_codes_json = _canonical_json(item["reason_codes"])
+        candidate = (
+            item["decision_id"],
+            item["storage_id"],
+            item["action_id"],
+            item["policy_id"],
+            item["observed_verdict"],
+            int(item["authorized"]),
+            reason_codes_json,
+            item["decided_at"],
+        )
+        with self._lock, closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                row = connection.execute(
+                    """
+                    SELECT decision_id, storage_id, action_id, policy_id,
+                           observed_verdict, authorized, reason_codes_json,
+                           decided_at
+                      FROM action_decisions
+                     WHERE decision_id = ?
+                    """,
+                    (item["decision_id"],),
+                ).fetchone()
+                if row is not None:
+                    existing = tuple(row)
+                    if existing != candidate:
+                        raise ActionDecisionConflict(
+                            "decision_id already exists with different content"
+                        )
+                    connection.commit()
+                    return False
+                if item["authorized"]:
+                    truth = connection.execute(
+                        """
+                        SELECT verdict, fresh_until
+                          FROM verdicts
+                         WHERE storage_id = ?
+                         ORDER BY id DESC
+                         LIMIT 1
+                        """,
+                        (item["storage_id"],),
+                    ).fetchone()
+                    if (
+                        truth is None
+                        or truth["verdict"] != item["observed_verdict"]
+                        or truth["fresh_until"] is None
+                    ):
+                        raise ActionDecisionConflict(
+                            "authorized decision no longer matches current truth"
+                        )
+                    deadline_text = truth["fresh_until"]
+                    deadline_candidate = (
+                        deadline_text[:-1] + "+00:00"
+                        if deadline_text.endswith("Z")
+                        else deadline_text
+                    )
+                    decided_candidate = (
+                        item["decided_at"][:-1] + "+00:00"
+                        if item["decided_at"].endswith("Z")
+                        else item["decided_at"]
+                    )
+                    try:
+                        deadline = datetime.fromisoformat(deadline_candidate)
+                        decided = datetime.fromisoformat(decided_candidate)
+                    except (TypeError, ValueError) as exc:
+                        raise ActionDecisionConflict(
+                            "authorized decision has no current freshness proof"
+                        ) from exc
+                    if deadline.tzinfo is None or deadline < decided:
+                        raise ActionDecisionConflict(
+                            "authorized decision has expired truth"
+                        )
+                connection.execute(
+                    """
+                    INSERT INTO action_decisions
+                        (
+                            decision_id,
+                            storage_id,
+                            action_id,
+                            policy_id,
+                            observed_verdict,
+                            authorized,
+                            reason_codes_json,
+                            decided_at
+                        )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    candidate,
+                )
+                connection.commit()
+                return True
+            except Exception:
+                connection.rollback()
+                raise
+
+    @staticmethod
+    def _decode_action_decision(row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "decision_id": row["decision_id"],
+            "storage_id": row["storage_id"],
+            "action_id": row["action_id"],
+            "policy_id": row["policy_id"],
+            "observed_verdict": row["observed_verdict"],
+            "authorized": bool(row["authorized"]),
+            "reason_codes": json.loads(row["reason_codes_json"]),
+            "decided_at": row["decided_at"],
+        }
+
+    def get_action_decision(self, decision_id: str) -> dict[str, Any] | None:
+        if not isinstance(decision_id, str) or not _SAFE_ID_RE.fullmatch(decision_id):
+            return None
+        with self._lock, closing(self._connect()) as connection:
+            row = connection.execute(
+                """
+                SELECT decision_id, storage_id, action_id, policy_id,
+                       observed_verdict, authorized, reason_codes_json,
+                       decided_at
+                  FROM action_decisions
+                 WHERE decision_id = ?
+                """,
+                (decision_id,),
+            ).fetchone()
+        return self._decode_action_decision(row) if row is not None else None
+
+    def list_action_decisions(
+        self,
+        *,
+        storage_id: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        if storage_id is not None and (
+            not isinstance(storage_id, str) or not _SAFE_ID_RE.fullmatch(storage_id)
+        ):
+            raise ValueError("storage_id must be a safe 1-128 character identifier")
+        if not isinstance(limit, int) or not 1 <= limit <= 500:
+            raise ValueError("limit must be between 1 and 500")
+        if not isinstance(offset, int) or not 0 <= offset <= 1_000_000:
+            raise ValueError("offset must be between 0 and 1,000,000")
+        filters = ""
+        parameters: list[Any] = []
+        if storage_id is not None:
+            filters = "WHERE storage_id = ?"
+            parameters.append(storage_id)
+        parameters.extend((limit, offset))
+        with self._lock, closing(self._connect()) as connection:
+            rows = connection.execute(
+                f"""
+                SELECT decision_id, storage_id, action_id, policy_id,
+                       observed_verdict, authorized, reason_codes_json,
+                       decided_at
+                  FROM action_decisions
+                  {filters}
+                 ORDER BY decided_at DESC, decision_id DESC
+                 LIMIT ? OFFSET ?
+                """,
+                parameters,
+            ).fetchall()
+        return [self._decode_action_decision(row) for row in rows]
 
     def configure_stale_reevaluation(
         self,

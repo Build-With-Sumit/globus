@@ -35,8 +35,8 @@ Optional fields:
                  (use for agents that don't produce brief files —
                  e.g. an agent that posts directly to Telegram)
 
-The reference impl ships 3 example agents (Research / SalesDesk /
-InfraWatch). The buildwithsumit.com production catalog uses
+The reference implementation ships 4 built-in agents (Research / SalesDesk /
+Narada / InfraWatch). The buildwithsumit.com production catalog uses
 Mahabharata-named agents (Drona, Vyas, Sanjay, Kripa, etc.) — those
 are NOT shipped here because they're branded for one specific team.
 Define your own.

@@ -183,6 +183,59 @@ class TruthService:
             artifact_root=artifact_root,
         )
 
+    def authorize_action(
+        self,
+        storage_id: str,
+        action_id: str,
+        *,
+        policy_id: str = "healthy_only",
+        decision_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Audit a fail-closed action decision from a persisted current verdict."""
+        from .action_gate import ActionGate
+
+        return ActionGate(self, clock=self._now).authorize(
+            storage_id=storage_id,
+            action_id=action_id,
+            policy_id=policy_id,
+            decision_id=decision_id,
+        )
+
+    def get_action_decision(self, decision_id: str) -> dict[str, Any] | None:
+        """Return one privacy-safe, immutable Action Gate decision."""
+        return self.repository.get_action_decision(decision_id)
+
+    def list_action_decisions(self, *, limit: int = 100) -> list[dict[str, Any]]:
+        """Return recent privacy-safe Action Gate decisions."""
+        return self.repository.list_action_decisions(limit=limit)
+
+    def run_outcome_gate_challenge(
+        self,
+        *,
+        artifact_root: Any | None = None,
+    ) -> dict[str, Any]:
+        """Run the credential-free business-outcome verification workflow."""
+        from .outcome_challenge import run_outcome_gate_challenge
+
+        return run_outcome_gate_challenge(
+            self,
+            artifact_root=artifact_root,
+        )
+
+    def platform_capabilities(self) -> dict[str, Any]:
+        """Return the validated, credential-free Mission Control inventory."""
+        from .platform_registry import (
+            get_platform_graph,
+            get_platform_summary,
+            list_capabilities,
+        )
+
+        return {
+            "summary": get_platform_summary(),
+            "capabilities": list_capabilities(include_planned=True),
+            "graph": get_platform_graph(),
+        }
+
     def load_demo(self) -> dict[str, Any]:
         results = [self.ingest(receipt) for receipt in self.samples()]
         return {

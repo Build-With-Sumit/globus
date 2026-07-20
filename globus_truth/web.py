@@ -13,6 +13,7 @@ from .storage import ReceiptConflict
 
 MAX_REQUEST_BYTES = 64 * 1024
 _SAFE_STORAGE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$")
+_SAFE_DECISION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _REJECTED_JSON = object()
 FAVICON_SVG = b"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
 <rect width="64" height="64" rx="16" fill="#0f1726"/>
@@ -25,7 +26,7 @@ DASHBOARD_HTML = r"""<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Globus Truth Layer</title>
+  <title>Globus Mission Control · Verified AgentOS</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <style>
     :root{color-scheme:dark;--ink:#f5f7ff;--muted:#9aa4b8;--panel:#111827cc;
@@ -50,6 +51,22 @@ DASHBOARD_HTML = r"""<!doctype html>
     button:disabled{cursor:wait;opacity:.7;transform:none}
     button:hover{border-color:#50617e;transform:translateY(-1px)}
     button.primary{background:linear-gradient(120deg,#55dfcb,#78a7ff);color:#071019;border:0}
+    .mission{padding:26px;background:linear-gradient(135deg,#102c31ee,#171d3bee);margin:24px 0}
+    .mission-top{display:grid;grid-template-columns:1.15fr .85fr;gap:28px;align-items:start}
+    .mission h2{font-size:clamp(25px,4vw,36px);letter-spacing:-.025em;margin:5px 0 9px}
+    .mission p{color:var(--muted);margin:0;max-width:680px}
+    .mission .actions{margin:18px 0 0}.mission-status{min-height:22px;color:var(--cyan);margin-top:8px}
+    .capabilities{display:grid;grid-template-columns:repeat(3,1fr);gap:9px}
+    .capability{padding:13px;background:#07121ee6;border:1px solid #2b4655;border-radius:12px}
+    .capability strong{display:block;color:var(--cyan);font-size:25px;line-height:1.1}
+    .capability span{display:block;color:var(--muted);font-size:11px;margin-top:5px}
+    .disclosure{color:var(--warn);font-size:11px;margin-top:10px;line-height:1.45}
+    .agent-flow{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-top:22px}
+    .agent-step{position:relative;padding:12px;background:#08111de6;border:1px solid #294058;border-radius:12px}
+    .agent-step small{display:block;color:var(--cyan);font-weight:800;text-transform:uppercase;
+      letter-spacing:.06em}.agent-step span{display:block;margin-top:3px;font-weight:750;font-size:13px}
+    .agent-step:not(:last-child)::after{content:"→";position:absolute;right:-8px;top:50%;z-index:2;
+      color:var(--cyan);font-weight:900;transform:translate(50%,-50%)}
     .lab{display:grid;grid-template-columns:1.4fr 1fr;gap:22px;align-items:center;padding:24px;
       background:linear-gradient(135deg,#11292dee,#151c35ee);margin:24px 0}
     .lab h2{font-size:25px;margin:5px 0 8px}.lab p{color:var(--muted);margin:0;max-width:650px}
@@ -95,25 +112,64 @@ DASHBOARD_HTML = r"""<!doctype html>
     .challenge-step{padding:14px;background:#0b1220;border:1px solid #26364f;border-radius:12px}
     .challenge-step small{display:block;color:var(--muted);margin-bottom:4px}.hash{font-family:
       ui-monospace,SFMono-Regular,Consolas,monospace;font-size:12px;overflow-wrap:anywhere}
+    .outcome-flow{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:18px 0}
+    .outcome-phase{padding:16px;background:#0b1220;border:1px solid #26364f;border-radius:13px}
+    .outcome-phase h3{font-size:17px;margin:7px 0 13px}.outcome-facts{display:grid;gap:7px}
+    .outcome-fact{display:flex;justify-content:space-between;gap:14px;border-top:1px solid #202b3e;padding-top:7px}
+    .outcome-fact span:first-child{color:var(--muted)}.outcome-fact strong{text-align:right}
+    .outcome-phase .actions{margin:15px 0 0}.outcome-phase .actions button{font-size:12px;padding:8px 10px}
     textarea{width:100%;min-height:220px;resize:vertical;background:#080e19;color:#dbe5ff;
       border:1px solid var(--line);border-radius:10px;padding:13px;font-family:ui-monospace,monospace;font-size:12px}
     .status{min-height:22px;color:var(--muted);margin-top:8px}.status.bad{color:var(--bad)}
     footer{color:var(--muted);font-size:12px;margin-top:20px;text-align:center}
-    @media(max-width:760px){header{display:block}.pulse{margin-top:18px}.lab{grid-template-columns:1fr}
+    @media(max-width:760px){header{display:block}.pulse{margin-top:18px}.mission-top,.lab{grid-template-columns:1fr}
+      .agent-flow{grid-template-columns:1fr}.agent-step:not(:last-child)::after{content:"↓";right:50%;top:auto;bottom:-9px}
       .challenge-flow{grid-template-columns:1fr 1fr}.summary{grid-template-columns:1fr 1fr}
-      .metric.hero{grid-column:1/-1}.toolbar{align-items:flex-start;flex-direction:column}.detail-grid{grid-template-columns:1fr}}
+      .outcome-flow{grid-template-columns:1fr}.metric.hero{grid-column:1/-1}
+      .toolbar{align-items:flex-start;flex-direction:column}.detail-grid{grid-template-columns:1fr}}
+    @media(max-width:420px){.shell{width:min(100% - 20px,1180px);padding-top:22px}
+      .mission,.lab{padding:18px}.capabilities{grid-template-columns:1fr}.summary{grid-template-columns:1fr}
+      .metric.hero{grid-column:auto}.challenge-flow{grid-template-columns:1fr}.modal-body{padding:16px}}
   </style>
 </head>
 <body>
 <main class="shell">
   <header>
-    <div><div class="eyebrow">Evidence before confidence</div><h1>Globus Truth Layer</h1>
-      <p class="lede">A local judge for agent-run claims. Every green light is backed by
-      measurements, every quiet run proves it actually ran, and contradictions stay visible.</p></div>
+    <div><div class="eyebrow">Verified AgentOS for organizations</div><h1>Globus Mission Control</h1>
+      <p class="lede">Run agents across knowledge, communication, and business systems—then
+      independently verify their outcomes before consequential actions can proceed.</p></div>
     <div class="pulse"><i></i><span>localhost · private by default</span></div>
   </header>
+  <section class="mission panel" aria-labelledby="missionTitle">
+    <div class="mission-top">
+      <div><div class="eyebrow">Business Outcome Gate</div><h2 id="missionTitle">From agent claim to verified action</h2>
+        <p>Mission Control creates three deidentified follow-ups in a separate local destination,
+        reopens and measures that destination, issues a Truth receipt, and permits one bounded
+        action only while the evidence is healthy. It then removes one row and proves the same
+        action is blocked.</p>
+        <div class="actions"><button class="primary" id="runOutcome">Run verified business workflow</button></div>
+        <div class="mission-status" id="outcomeStatus" role="status"></div>
+      </div>
+      <div>
+        <div class="capabilities" aria-label="Shipped platform capabilities">
+          <div class="capability"><strong id="platformAgents">4</strong><span>built-in agents</span></div>
+          <div class="capability"><strong id="platformTools">20</strong><span>LLM-facing tools</span></div>
+          <div class="capability"><strong id="platformAdapters">33</strong><span>implemented provider adapters</span></div>
+        </div>
+        <div class="disclosure" id="platformDisclosure">Implemented/setup required does not mean
+          connected or configured. Counts describe code shipped in this repository.</div>
+      </div>
+    </div>
+    <div class="agent-flow" aria-label="Verified business workflow">
+      <div class="agent-step"><small>01 · Agent claim</small><span>3 follow-ups created</span></div>
+      <div class="agent-step"><small>02 · Read-back</small><span>Destination reopened</span></div>
+      <div class="agent-step"><small>03 · Truth receipt</small><span>Counts + SHA-256</span></div>
+      <div class="agent-step"><small>04 · Action Gate</small><span>Policy checks verdict</span></div>
+      <div class="agent-step"><small>05 · Outcome</small><span>Execute or prevent</span></div>
+    </div>
+  </section>
   <section class="lab panel">
-    <div><div class="eyebrow">60-second evidence lab</div><h2>Change one byte. Watch Globus catch it.</h2>
+    <div><div class="eyebrow">Globus Truth Layer · Evidence Lab</div><h2>Change one byte. Watch Globus catch it.</h2>
       <p>Judge Mode writes a real local artifact, verifies it with the same read-back
       primitive as the production AgentRunner, appends one controlled byte, and verifies again.
       No model, account, API key, Docker, or external call.</p>
@@ -149,6 +205,14 @@ DASHBOARD_HTML = r"""<!doctype html>
     No receipts yet. Load the safe scenarios or POST a receipt to the API.</div></section>
   <footer>All evaluation and storage happen on this machine. No external service is called.</footer>
 </main>
+<dialog id="outcome"><div class="modal-head"><div><div class="eyebrow">Verified business outcome</div>
+  <h2>Action Gate report</h2></div><button class="close" data-close="outcome">Close</button></div>
+  <div class="modal-body"><div id="outcomeBody"></div><div class="actions">
+    <button id="downloadOutcome">Download outcome JSON</button>
+  </div></div></dialog>
+<dialog id="gate"><div class="modal-head"><div><div class="eyebrow">Immutable authorization audit</div>
+  <h2 id="gateTitle">Action Gate decision</h2></div><button class="close" data-close="gate">Close</button></div>
+  <div class="modal-body" id="gateBody"></div></dialog>
 <dialog id="detail"><div class="modal-head"><div><div class="eyebrow">Run inspection</div>
   <h2 id="detailTitle"></h2></div><button class="close" data-close="detail">Close</button></div>
   <div class="modal-body" id="detailBody"></div></dialog>
@@ -166,7 +230,7 @@ DASHBOARD_HTML = r"""<!doctype html>
   </div></div></dialog>
 <script>
 "use strict";
-const $=id=>document.getElementById(id), state={runs:[],challenge:null};
+const $=id=>document.getElementById(id), state={runs:[],challenge:null,outcome:null,platform:null};
 const labels={healthy:"healthy",verified_no_work:"verified no-work",
   degraded_contradictory:"contradictory",failed:"failed",stale:"stale"};
 function el(tag,text,cls){const n=document.createElement(tag);if(text!==undefined)n.textContent=String(text);
@@ -199,6 +263,72 @@ function showDetail(item){const r=item.receipt||{},v=item.evaluation||{};$("deta
   for(const c of v.checks||[]){const d=el("div",undefined,"check"+(c.passed?"":" bad"));
     d.append(el("b",c.passed?"✓":"×"));const text=el("div");text.append(el("div",c.name),el("div",c.detail,"sub"));d.append(text);root.append(d)}
   $("detail").showModal()}
+function outcomePhase(name){return (state.outcome?.phases||[]).find(p=>p.name===name)||{}}
+function outcomeFact(root,label,value,hash=false){const row=el("div",undefined,"outcome-fact");
+  row.append(el("span",label),el("strong",value??"—",hash?"hash":undefined));root.append(row)}
+function renderOutcome(report){state.outcome=report;const root=$("outcomeBody");root.replaceChildren();
+  const action=report.action||{},destination=report.destination||{};
+  root.append(el("span",report.expectations_met?"workflow verified":"workflow needs attention",
+    "badge "+(report.expectations_met?"healthy":"failed")));
+  root.append(el("div",`Challenge ${report.challenge_id||"unknown"} used generated data, local verification, and ${report.external_calls??0} external calls.`,"status"));
+  const flow=el("div",undefined,"outcome-flow");
+  for(const phase of report.phases||[]){const before=phase.name==="before_change";
+    const auditVerified=phase.gate?.audit_verified===true;
+    const authorized=phase.gate?.authorized===true;
+    const actionResult=before
+      ?(auditVerified&&authorized&&action.first_executed===true?"Authorized and executed":"Not executed")
+      :(!authorized&&auditVerified&&action.second_prevented===true?"Blocked and prevented":"Not proven");
+    const card=el("section",undefined,"outcome-phase");
+    card.append(el("span",labels[phase.verdict]||phase.verdict||"unknown",
+      "badge "+(labels[phase.verdict]?phase.verdict:"failed")));
+    card.append(el("h3",`${phase.claimed_count??"?"} → ${phase.observed_count??"?"} · ${
+      actionResult}`));
+    const facts=el("div",undefined,"outcome-facts");
+    outcomeFact(facts,"Truth verdict",labels[phase.verdict]||phase.verdict||"unknown");
+    outcomeFact(facts,"Action Gate",auditVerified
+      ?(authorized?"authorized + audited":"blocked + audited")
+      :"unverified / fail-closed");
+    outcomeFact(facts,"Audit read-back",auditVerified?"exact decision verified":"not verified");
+    outcomeFact(facts,"Business action",before&&action.first_executed?"executed":
+      !before&&action.second_prevented?"prevented":"not proven");
+    outcomeFact(facts,"Expected SHA-256",phase.expected_sha256,true);
+    outcomeFact(facts,"Observed SHA-256",phase.observed_sha256,true);
+    card.append(facts);
+    const actions=el("div",undefined,"actions"),receiptButton=el("button","Inspect receipt"),
+      gateButton=el("button","Inspect gate decision");
+    receiptButton.addEventListener("click",()=>inspectOutcomeReceipt(phase.name));
+    gateButton.addEventListener("click",()=>inspectOutcomeGate(phase.name));
+    actions.append(receiptButton,gateButton);card.append(actions);flow.append(card)}
+  root.append(flow);
+  const grid=el("div",undefined,"detail-grid");
+  pair(grid,"Destination",destination.name||"generated local destination");
+  pair(grid,"Rows changed",destination.rows_modified);
+  pair(grid,"First outbox count",action.outbox_rows_after_first_gate);
+  pair(grid,"Final outbox count",action.final_outbox_rows);root.append(grid);
+  root.append(el("div","Decision","section"),el("div",report.expectations_met
+    ?"3 → 3 stayed healthy, so one bounded local action executed. After the destination changed to 3 → 2, the contradictory receipt caused the same policy to block and the second action was never invoked."
+    :"The workflow completed without proving the expected healthy-allow and contradictory-block transition. Inspect the receipts and gate decisions before relying on it.","sub"))}
+async function inspectOutcomeReceipt(name){const phase=outcomePhase(name);if(!phase.storage_id)return;
+  try{let item=state.runs.find(run=>run.storage_id===phase.storage_id);
+    if(!item)item=await api(`/api/v1/runs/${encodeURIComponent(phase.storage_id)}`);
+    $("outcome").close();showDetail(item)}catch(e){alert(`Receipt unavailable: ${e.message}`)}}
+function showGate(decision){$("gateTitle").textContent=decision.authorized?"Action authorized":"Action blocked";
+  const root=$("gateBody");root.replaceChildren();
+  root.append(el("span",decision.authorized?"authorized":"blocked",
+    "badge "+(decision.authorized?"healthy":"degraded_contradictory")));
+  const grid=el("div",undefined,"detail-grid");pair(grid,"Decision",decision.decision_id);
+  pair(grid,"Receipt",decision.storage_id);pair(grid,"Action",decision.action_id);
+  pair(grid,"Policy",decision.policy_id);pair(grid,"Observed verdict",labels[decision.observed_verdict]||decision.observed_verdict);
+  pair(grid,"Decided",fmt(decision.decided_at));root.append(grid,
+    el("div","Reason codes","section"),el("div",(decision.reason_codes||[]).join(", ")||"—","sub"));
+  $("gate").showModal()}
+async function inspectOutcomeGate(name){const phase=outcomePhase(name),id=phase.gate?.decision_id;if(!id)return;
+  try{const decision=await api(`/api/v1/gate/decisions/${encodeURIComponent(id)}`);
+    $("outcome").close();showGate(decision)}catch(e){alert(`Decision unavailable: ${e.message}`)}}
+function downloadOutcome(){if(!state.outcome)return;const body=JSON.stringify(state.outcome,null,2);
+  const url=URL.createObjectURL(new Blob([body],{type:"application/json"}));const link=el("a");
+  link.href=url;link.download=`${state.outcome.challenge_id||"globus-outcome-gate"}.json`;
+  document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),0)}
 function challengePhase(name){return (state.challenge?.phases||[]).find(p=>p.name===name)||{}}
 function shortHash(value){const text=String(value||"");return text?`${text.slice(0,16)}…`:"—"}
 function renderChallenge(report){state.challenge=report;const root=$("challengeBody");root.replaceChildren();
@@ -238,6 +368,13 @@ async function refresh(){try{const [summary,list]=await Promise.all([api("/api/v
   state.runs=list.runs||[];$("trusted").textContent=summary.trusted;$("total").textContent=summary.total;
   $("attention").textContent=summary.attention;$("agents").textContent=new Set(state.runs.map(x=>x.receipt?.agent_id).filter(Boolean)).size;
   renderRows(state.runs)}catch(e){$("empty").hidden=false;$("empty").textContent=`Could not load: ${e.message}`}}
+async function loadPlatform(){try{const platform=await api("/api/v1/platform/capabilities");
+  state.platform=platform;const summary=platform.summary||{},headline=summary.headline||{};
+  $("platformAgents").textContent=headline.built_in_agents??"—";
+  $("platformTools").textContent=headline.llm_tools??"—";
+  $("platformAdapters").textContent=headline.implemented_provider_adapters??"—";
+  if(summary.disclosure)$("platformDisclosure").textContent=summary.disclosure}
+  catch(e){$("platformDisclosure").textContent=`Capability inventory unavailable: ${e.message}`}}
 $("loadSamples").addEventListener("click",async()=>{const b=$("loadSamples");b.disabled=true;try{
   await api("/api/v1/samples/load",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"});await refresh()}
   catch(e){alert(e.message)}finally{b.disabled=false}});
@@ -248,7 +385,16 @@ $("runChallenge").addEventListener("click",async()=>{const b=$("runChallenge"),o
       ?"Caught: the changed artifact could not stay green."
       :"Challenge completed, but the expected mismatch was not proven.";
     $("challenge").showModal()}catch(e){out.textContent=`Challenge failed safely: ${e.message}`}finally{b.disabled=false}});
-$("refresh").addEventListener("click",refresh);
+$("runOutcome").addEventListener("click",async()=>{const b=$("runOutcome"),out=$("outcomeStatus");
+  b.disabled=true;out.textContent="Creating 3 follow-ups, reading them back, and testing the Action Gate…";
+  try{const report=await api("/api/v1/judge/outcome-gate",
+      {method:"POST",headers:{"Content-Type":"application/json"},body:"{}"});
+    await refresh();renderOutcome(report);out.textContent=report.expectations_met
+      ?"Verified: 3 → 3 executed once; 3 → 2 was blocked."
+      :"Workflow finished, but the expected allow-to-block transition was not proven.";
+    $("outcome").showModal()}catch(e){out.textContent=`Outcome Gate failed safely: ${e.message}`}
+  finally{b.disabled=false}});
+$("refresh").addEventListener("click",()=>Promise.all([refresh(),loadPlatform()]));
 $("showIngest").addEventListener("click",async()=>{if(!$("receiptJson").value){try{
   const data=await api("/api/v1/samples");$("receiptJson").value=JSON.stringify(data.receipts?.[0]||{},null,2)}catch(_){}}
   $("ingestStatus").textContent="";$("ingest").showModal()});
@@ -259,8 +405,9 @@ $("submitReceipt").addEventListener("click",async()=>{const out=$("ingestStatus"
 $("inspectClean").addEventListener("click",()=>inspectChallenge("before_tamper"));
 $("inspectCaught").addEventListener("click",()=>inspectChallenge("after_tamper"));
 $("downloadChallenge").addEventListener("click",downloadChallenge);
+$("downloadOutcome").addEventListener("click",downloadOutcome);
 document.querySelectorAll("[data-close]").forEach(b=>b.addEventListener("click",()=>$(b.dataset.close).close()));
-refresh();
+Promise.all([refresh(),loadPlatform()]);
 </script>
 </body></html>"""
 
@@ -388,6 +535,39 @@ class TruthRequestHandler(BaseHTTPRequestHandler):
             else:
                 self._json(200, run)
             return
+        if path == "/api/v1/platform/capabilities":
+            try:
+                capabilities = self.server.service.platform_capabilities()
+            except Exception as exc:
+                print(
+                    "[truth-http] platform inventory failed safely: "
+                    f"{type(exc).__name__}"
+                )
+                self._error(500, "platform capabilities unavailable safely")
+                return
+            self._json(200, capabilities)
+            return
+        if path.startswith("/api/v1/gate/decisions/"):
+            decision_id = unquote(
+                path.removeprefix("/api/v1/gate/decisions/")
+            )
+            if not _SAFE_DECISION_ID.fullmatch(decision_id):
+                self._error(400, "invalid action decision identifier")
+                return
+            try:
+                decision = self.server.service.get_action_decision(decision_id)
+            except Exception as exc:
+                print(
+                    "[truth-http] action decision lookup failed safely: "
+                    f"{type(exc).__name__}"
+                )
+                self._error(500, "action decision unavailable safely")
+                return
+            if decision is None:
+                self._error(404, "action decision not found")
+            else:
+                self._json(200, decision)
+            return
         if path == "/api/v1/samples":
             self._json(200, {"receipts": self.server.service.samples()})
             return
@@ -465,6 +645,21 @@ class TruthRequestHandler(BaseHTTPRequestHandler):
                     f"{type(exc).__name__}"
                 )
                 self._error(500, "judge challenge failed safely")
+                return
+            self._json(201, result)
+            return
+        if path == "/api/v1/judge/outcome-gate":
+            if payload != {}:
+                self._error(400, "outcome gate accepts only an empty JSON object")
+                return
+            try:
+                result = self.server.service.run_outcome_gate_challenge()
+            except Exception as exc:
+                print(
+                    "[truth-http] outcome gate failed safely: "
+                    f"{type(exc).__name__}"
+                )
+                self._error(500, "outcome gate failed safely")
                 return
             self._json(201, result)
             return

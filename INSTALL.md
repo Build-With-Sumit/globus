@@ -1,11 +1,12 @@
 # Installing Globus
 
 > **Status: alpha.** The reference implementation runs in production at
-> buildwithsumit.com. This guide gets v0.12 running on your box — sign-in
+> buildwithsumit.com. This guide gets v0.13 running on your box — sign-in
 > via OTP, vault from Obsidian zip + Google Drive + Gmail + the
 > WhatsApp/Teams Chrome extension, text and voice chat (ElevenLabs;
 > see [`docs/voice-setup.md`](docs/voice-setup.md)), and a working
-> agents subsystem (3 sample agents that produce daily markdown briefs;
+> agents subsystem (4 built-in agents: Research, Sales Desk, Narada, and
+> Infra Watch;
 > see `/members/globus/agents`). Telegram via Telethon daemon is the
 > only major source still ahead — see [ROADMAP.md](ROADMAP.md).
 
@@ -40,6 +41,51 @@ $EDITOR .env       # set DB_PASSWORD + GLOBUS_FIRST_MEMBER_EMAIL
 
 docker compose up -d
 ```
+
+### Credential-free Mission Control
+
+The v0.13 verification and control surface can run independently of MySQL and
+provider configuration:
+
+```bash
+python -m globus_truth
+```
+
+Open <http://127.0.0.1:8765>, then click **Run verified business workflow**.
+The generated challenge independently reads back three local destination rows,
+allows one bounded local action from a healthy receipt, removes one row, then
+blocks the second action from the contradictory 3 → 2 read-back. It uses no
+LLM, API key, provider account, Docker runtime, or external network call.
+
+The capability inventory on the same page is source-backed and separates
+`native`, `implemented/setup_required`, `bridge/catalog`, and `planned`.
+Implemented/setup-required does not mean the corresponding account is
+connected.
+
+To run the same workflow without a browser:
+
+```bash
+python -m globus_truth outcome-challenge --db globus-truth.db
+```
+
+The command prints the safe report as JSON and exits `0` only when the proof's
+`expectations_met` flag is exactly true. Add `--artifact-root PATH` to choose
+the parent directory for generated challenge destinations.
+
+You can also audit an action decision from the command line:
+
+```bash
+python -m globus_truth gate \
+  --db globus-truth.db \
+  RECEIPT_STORAGE_ID \
+  --action-id review-follow-ups \
+  --policy healthy_only
+```
+
+Exit status `0` means authorized, `1` means blocked, and `2` means an input or
+audit error. The alternative `trusted_completion` policy also accepts
+`verified_no_work`. Both policies block missing, malformed, unavailable,
+failed, contradictory, and stale receipt state.
 
 What the entrypoint does on first boot:
 1. Waits for MySQL to accept connections.
@@ -234,7 +280,7 @@ intentionally bring-your-own:
 cp config/persona.example.md config/persona.md
 $EDITOR config/persona.md       # rewrite for YOUR audience
 
-$EDITOR server/globus_agents_catalog.py   # replace the 3 example agents
+$EDITOR server/globus_agents_catalog.py   # replace or extend the 4 built-in agents
 ```
 
 The reference impl uses Mahabharata-named agents (Drona, Vyas, Sanjay,
@@ -245,7 +291,7 @@ one specific team. Define your own.
 
 ```bash
 python3 server/globus_server.py
-# globus/0.12.0 booting on 127.0.0.1:8090
+# globus/0.13.0 booting on 127.0.0.1:8090
 #   site:     https://globus.example.com
 #   db:       globus@127.0.0.1:3306/globus
 #   llm:      claude-oauth

@@ -11,9 +11,10 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__
+from .action_gate import ActionGateAuditError, POLICIES
 from .evaluator import evaluate_receipt
 from .service import TruthService
-from .storage import ReceiptConflict, TruthRepository
+from .storage import ActionDecisionConflict, ReceiptConflict, TruthRepository
 from .web import TruthHTTPServer
 
 DEFAULT_DATABASE = "globus-truth.db"
@@ -50,7 +51,7 @@ def _serve(args: argparse.Namespace, *, load_demo: bool) -> int:
     host, port = server.server_address[:2]
     display_host = "127.0.0.1" if host in {"0.0.0.0", "::"} else host
     url = f"http://{display_host}:{port}/"
-    print(f"Globus Truth Layer {__version__} listening at {url}", flush=True)
+    print(f"Globus Mission Control {__version__} listening at {url}", flush=True)
     print(f"SQLite database: {Path(args.db).resolve()}", flush=True)
     if args.open:
         webbrowser.open(url)
@@ -66,7 +67,7 @@ def _serve(args: argparse.Namespace, *, load_demo: bool) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m globus_truth",
-        description="Evidence-backed run receipts for the Globus agent fleet.",
+        description="Verified outcomes and fail-closed actions for the Globus agent fleet.",
     )
     parser.add_argument("--version", action="version", version=__version__)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -104,6 +105,34 @@ def build_parser() -> argparse.ArgumentParser:
 
     load = subparsers.add_parser("load-demo", help="append five safe sample receipts")
     database_options(load)
+
+    gate = subparsers.add_parser(
+        "gate",
+        help="audit a fail-closed action decision from a persisted receipt",
+    )
+    database_options(gate)
+    gate.add_argument("storage_id", help="persisted receipt/storage identifier")
+    gate.add_argument(
+        "--action-id",
+        required=True,
+        help="stable identifier for the controlled downstream action",
+    )
+    gate.add_argument(
+        "--policy",
+        choices=sorted(POLICIES),
+        default="healthy_only",
+        help="authorization policy (default: healthy_only)",
+    )
+
+    outcome = subparsers.add_parser(
+        "outcome-challenge",
+        help="prove a healthy allow and contradictory block against local state",
+    )
+    database_options(outcome)
+    outcome.add_argument(
+        "--artifact-root",
+        help="optional directory for isolated challenge artifacts",
+    )
     return parser
 
 
@@ -137,13 +166,34 @@ def main(argv: list[str] | None = None) -> int:
             result = {"runs": _service(args).repository.list_runs(limit=args.limit)}
         elif args.command == "load-demo":
             result = _service(args).load_demo()
+        elif args.command == "gate":
+            result = _service(args).authorize_action(
+                args.storage_id,
+                args.action_id,
+                policy_id=args.policy,
+            )
+        elif args.command == "outcome-challenge":
+            result = _service(args).run_outcome_gate_challenge(
+                artifact_root=args.artifact_root,
+            )
         else:  # pragma: no cover - argparse prevents this
             parser.error("unknown command")
             return 2
-    except (OSError, json.JSONDecodeError, ValueError, ReceiptConflict) as exc:
+    except (
+        ActionDecisionConflict,
+        ActionGateAuditError,
+        OSError,
+        json.JSONDecodeError,
+        ValueError,
+        ReceiptConflict,
+    ) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     print(json.dumps(result, ensure_ascii=False, indent=2))
+    if args.command == "gate":
+        return 0 if result["authorized"] else 1
+    if args.command == "outcome-challenge":
+        return 0 if result.get("expectations_met") is True else 1
     return 0
 
 

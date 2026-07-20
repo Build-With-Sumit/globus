@@ -18,7 +18,9 @@ accurately on camera.
 Globus already existed as a self-hosted private business AI platform with
 cited chat, voice, connected data, and agents. For OpenAI Build Week, we used
 Codex with GPT-5.6 to add a new self-contained component called the **Globus
-Truth Layer**, then wired it end to end into the public OSS agent runner.
+Truth Layer**, wired it end to end into the public OSS agent runner, and
+extended it in v0.13 with **Mission Control**, a source-backed capability
+registry, and a fail-closed **Action Gate**.
 
 ## Important naming
 
@@ -252,25 +254,91 @@ The fixtures cover:
 
 They are de-identified, freshly timestamped, and require no credentials.
 
-### 10. Automated tests
+### 10. Mission Control capability registry
 
-The Truth Layer suite has 60 passing tests:
+The versioned registry gives operators an honest inventory of what the public
+repository contains. Its 71 source-backed entries include:
 
-- 18 evaluator tests.
-- 11 HTTP and dashboard tests.
-- 14 storage and automatic-aging tests.
-- 2 command-line tests.
-- 11 real AgentRunner adapter and isolation tests.
-- 4 real-byte Judge Mode tests.
+- 4 built-in agents.
+- 20 LLM-facing tools.
+- 33 implemented/setup-required provider adapters: 9 lead-source, 8
+  verification, 6 sender, and 10 CRM adapters.
+- 14 additional connector, channel, and model-route entries.
 
-They test malformed receipts, impossible counts, future timestamps, stale
-heartbeats, missing evidence, failed checks, refusal text, strict JSON,
-security headers, SQL metacharacters, immutable receipt IDs, idempotent retries,
-pagination, automatic persisted-receipt aging, artifact read-back and hashes,
-tenant-isolated status lookup, atomic concurrent stale transitions, large-fleet
-summaries, failed ledger commits, non-overwriting evidence files, persistence
-failures, the complete five-verdict demo, and a real one-byte mutation that
-must flip a new verification from healthy to contradictory.
+Every entry declares its repository source, setup requirements, risk, approval
+mode, and read-back behavior. Availability is explicit: `native`,
+`implemented/setup_required`, `bridge/catalog`, or `planned`. Implemented does
+not mean the operator has connected or configured the external account.
+
+This is not a claim of OpenClaw parity. It is the start of an evidence-first
+control plane that exposes the gap between code that exists and a capability
+that is actually ready to use.
+
+### 11. A fail-closed Action Gate
+
+The Action Gate turns a persisted current Truth verdict into a bound,
+immutable authorization decision. The caller supplies a receipt storage ID,
+stable action ID, and policy—not a verdict.
+
+The gate reads the receipt through the service so freshness is reevaluated,
+applies one of two policies, and writes the audit record before it can return
+an allowed decision. The insert transaction rechecks an allow against the
+latest persisted verdict and freshness deadline, closing the read-to-audit
+race:
+
+- `healthy_only` accepts only healthy.
+- `trusted_completion` accepts healthy or verified no-work.
+
+Missing, malformed, unavailable, failed, contradictory, and stale evidence all
+block. Verified no-work blocks under `healthy_only`. If the audit write or
+latest-verdict recheck fails, authorization fails closed.
+
+### 12. A verified business-outcome challenge
+
+Mission Control includes a stronger, credential-free proof than a static
+fixture:
+
+1. Generate three de-identified follow-up rows in a separate local SQLite
+   destination.
+2. Reopen that destination through an independent connection, sort and
+   canonicalize its rows, and measure count plus SHA-256.
+3. Persist a 3 claimed → 3 observed receipt. It evaluates healthy.
+4. The `healthy_only` gate audits an allow decision. The workflow reads that
+   exact decision back from the audit table, then exactly one bounded local
+   outbox insert executes.
+5. Delete exactly one generated destination row.
+6. Reopen and measure again. The 3 claimed → 2 observed receipt evaluates
+   contradictory.
+7. The gate audits a block decision, the second action callback is not
+   invoked, and the outbox remains at exactly one row.
+
+The challenge uses no LLM, MySQL, external database, API key, provider account,
+Docker runtime, or network call. It returns safe generated IDs, a relative
+path, measurements, hashes, verdicts, decisions, and action counts—not row
+payloads or absolute paths.
+
+### 13. Automated tests
+
+The v0.13 hermetic Truth/Mission Control suite contains 93 tests covering:
+
+- Receipt evaluation and verdict precedence.
+- HTTP, dashboard, and strict JSON behavior.
+- Immutable storage and automatic aging.
+- Command-line interfaces.
+- Real AgentRunner adapter and member isolation.
+- Real-byte Evidence Lab verification.
+- Action Gate policy, binding, audit, idempotency, and failure behavior.
+- Capability-registry schema, count, source, and secret-safety checks.
+- Verified-outcome success, contradiction, non-invocation, confinement, and
+  concurrent-run behavior.
+
+The suite exercises malformed receipts, impossible counts, future timestamps,
+stale heartbeats, missing evidence, failed checks, refusal text, strict JSON,
+security headers, SQL metacharacters, immutable IDs, idempotent retries,
+pagination, automatic aging, artifact read-back and hashes, tenant-isolated
+status, atomic concurrent transitions, persistence failures, the complete
+five-verdict demo, a real one-byte mutation, and a destination mismatch that
+must prevent a second bounded action.
 
 The repository-level command also runs the wider Globus behavioural checks,
 visible-verdict rendering tests, public-asset smoke tests, and Python
@@ -292,7 +360,10 @@ Codex with GPT-5.6 helped translate those lessons into:
 - Automatic persisted-receipt aging.
 - The service and command-line interface.
 - The JSON API.
-- The responsive dashboard.
+- The Mission Control dashboard.
+- The versioned, source-backed capability registry.
+- The immutable, fail-closed Action Gate.
+- The credential-free verified business-outcome challenge.
 - The credential-free real-byte Evidence Lab.
 - The real OSS AgentRunner adapter and visible verdict integration.
 - Safe fixtures.
@@ -324,9 +395,11 @@ They should not be represented as having been built with Codex or GPT-5.6.
 > The outcome is one of five explainable verdicts: healthy, verified no-work,
 > contradictory, failed, or stale.
 >
-> The fastest proof is Judge Mode. It writes a real artifact and verifies it
-> healthy, appends exactly one byte, and re-verifies it as contradictory using
-> the same read-back primitive as the production runner. No LLM or API key.
+> In Mission Control, the fastest proof is a generated business workflow. It
+> independently reads back three destination rows. Three claimed and three
+> observed is healthy, so the gate allows one local action. Then one row is
+> removed. Three claimed and two observed is contradictory, so the gate blocks
+> and the second action never runs. No LLM, API key, or external call.
 >
 > Once the public Globus runner has a durable run ID, it writes the brief, reads
 > it back, verifies its SHA-256, and stores the receipt before the ledger can
@@ -338,12 +411,12 @@ They should not be represented as having been built with Codex or GPT-5.6.
 ### Reel screen cues
 
 1. Open on camera: “An agent saying done is making a claim.”
-2. Click **Run live tamper challenge**.
-3. Show the healthy receipt, the one-byte change, and the contradictory result.
-4. Show the before/after SHA-256 values.
+2. Click **Run verified business workflow**.
+3. Show 3 → 3 healthy, allowed, and executed.
+4. Show 3 → 2 contradictory, blocked, and prevented.
 5. Briefly show one real public Globus agent and its Truth badge.
-6. Show the five verdict badges.
-7. Show all 60 Truth tests passing in the terminal.
+6. Show the 71-capability registry disclosure: implemented is not connected.
+7. Show the complete hermetic test command passing in the terminal.
 8. Close on camera with the final reliability-contract line.
 
 <!-- pagebreak -->
@@ -355,8 +428,8 @@ They should not be represented as having been built with Codex or GPT-5.6.
 > Globus is a self-hosted private business AI platform. It brings together
 > cited chat, voice, connected business data, and specialized agents.
 >
-> But the part I built specifically for OpenAI Build Week is the Globus Truth
-> Layer, using Codex with GPT-5.6.
+> The work I built specifically for OpenAI Build Week is the Globus Truth
+> Layer and its v0.13 Mission Control and Action Gate, using Codex with GPT-5.6.
 >
 > The problem is simple: an agent saying “done” is only making a claim. A
 > polished answer does not prove that a database was updated, a file was
@@ -431,6 +504,47 @@ failed check and the evaluator’s reason code.
 
 **Screen cue:** Show all five safe scenario rows together.
 
+### Mission Control and the capability map
+
+> Mission Control adds a source-backed map of the platform we actually ship:
+> four built-in agents, twenty LLM-facing tools, and thirty-three implemented
+> provider adapters, plus connector, channel, and model-route entries.
+>
+> The full registry contains seventy-one capabilities. But the status labels
+> matter more than the number. Native, implemented but setup-required, bridge
+> or catalog, and planned are separate states. Implemented does not mean an
+> external account is connected.
+
+**Screen cue:** Show the Mission Control counts, then the disclosure beside
+the capability map.
+
+### The Action Gate and verified outcome
+
+> A receipt is useful for monitoring, but a control plane should also stop a
+> bad action.
+>
+> So the Action Gate reads a persisted current verdict itself. The caller
+> cannot supply a preferred verdict. Under the healthy-only policy, only a
+> healthy receipt can authorize the bound action. Missing, malformed, failed,
+> contradictory, or stale evidence blocks. The decision is written to an
+> immutable audit table before an allow can return, and the same transaction
+> rechecks that its verdict is still current.
+>
+> The credential-free workflow creates three generated follow-up rows in a
+> separate local destination and reopens that database through an independent
+> connection. Three claimed and three observed produces a healthy receipt, so
+> the workflow reads back the exact gate audit and exactly one local outbox
+> action executes.
+>
+> Then the challenge removes one generated row and reads the destination
+> again. Three claimed and two observed is contradictory. The gate blocks, the
+> second callback is never invoked, and the outbox remains at one action.
+
+**Screen cue:** Click **Run verified business workflow**. Hold first on 3 → 3
+healthy/allowed/executed, then on 3 → 2 contradictory/blocked/prevented. Open
+one gate decision and point out the receipt, action, policy, verdict, and
+reason-code binding.
+
 ### The 60-second Evidence Lab
 
 > A judge should not need our LLM key or MySQL configuration to see the core
@@ -461,7 +575,9 @@ values, and then open the healthy and contradictory receipts.
 >
 > We also built a local JSON API and a responsive dashboard where an operator
 > can inspect fleet totals, open a receipt, and understand exactly why the
-> system accepted or rejected it.
+> system accepted or rejected it. Mission Control also exposes the validated
+> capability inventory, the verified-outcome challenge, and immutable gate
+> decisions through the same loopback service.
 
 **Screen cue:** Show the dashboard detail panel, then briefly show an API JSON
 response.
@@ -513,16 +629,18 @@ end on the complete passing summary.
 > The broader Globus platform existed before Build Week and remains
 > Claude-native at runtime.
 >
-> The new Build Week work is the Truth Layer and its public OSS runner
-> integration. In the included runner, an `ok` ledger state requires a trusted
-> persisted receipt; failures before receipt creation remain explicitly
-> non-green. I am not claiming that every private production workflow already
-> uses the same adapter.
+> The new Build Week work is the Truth Layer, Mission Control, Action Gate, and
+> the public OSS runner integration. In the included runner, an `ok` ledger
+> state requires a trusted persisted receipt; failures before receipt creation
+> remain explicitly non-green. I am not claiming that every private production
+> workflow already uses the same adapter.
 >
 > It also is not a universal oracle that independently proves every external
-> event. It verifies the receipt’s structure, measurements, timing, declared
-> checks, and supplied evidence metadata. Stronger destination verification is
-> the next step.
+> event. It verifies the receipt's structure, measurements, timing, declared
+> checks, and supplied evidence metadata. The local outcome challenge does
+> independently read back its controlled destination, but that does not imply
+> every provider adapter is connected or every external service has the same
+> proof today.
 
 **Screen cue:** Return to camera for this section. The scope disclosure is more
 credible when spoken directly.
@@ -534,25 +652,27 @@ credible when spoken directly.
 >
 > They should earn that status with measurements, evidence, and checks.
 >
-> That is what the Globus Truth Layer adds: a small, inspectable reliability
-> contract between an agent’s claim and the operator who has to trust it.
+> That is what Globus Mission Control adds: an inspectable reliability contract
+> between an agent's claim and the operator who has to trust it, plus a gate
+> that can stop the next action when the evidence does not match.
 
 ## Recommended visual shot list
 
 1. Globus product overview.
 2. Existing Agents dashboard.
-3. Evidence Lab before the click.
-4. Four-step one-byte challenge result and before/after hashes.
-5. Healthy receipt.
-6. Verified no-work receipt and its reason.
-7. Contradictory receipt with failed artifact checks.
-8. Failure receipt with explicit error detail.
-9. Stale receipt and freshness check.
-10. SQLite receipt records and latest verdicts, shown through the dashboard.
-11. JSON API response.
-12. Codex/GPT-5.6 build session.
-13. Terminal running all 60 Truth tests.
-14. Public repository and one-command quick start.
+3. Mission Control capability counts and setup-state disclosure.
+4. Verified workflow before the click.
+5. 3 → 3 healthy, allowed, and executed.
+6. 3 → 2 contradictory, blocked, and prevented.
+7. One immutable Action Gate decision.
+8. Evidence Lab one-byte result and before/after hashes.
+9. Healthy and verified-no-work receipts.
+10. Contradictory, failure, and stale reason codes.
+11. SQLite receipt records and latest verdicts in the dashboard.
+12. JSON API response.
+13. Codex/GPT-5.6 build session.
+14. Terminal running the complete hermetic test command.
+15. Public repository and one-command quick start.
 
 ## Accuracy guide
 
@@ -567,6 +687,11 @@ credible when spoken directly.
 - “The full hermetic test command passes.”
 - “Judge Mode appends exactly one byte and catches it on a new verification.”
 - “The credential-free Evidence Lab uses the production artifact read-back primitive.”
+- “The outcome challenge independently reads a controlled local destination.”
+- “The healthy 3 → 3 receipt permits one bounded local action.”
+- “The contradictory 3 → 2 receipt blocks, so the second callback is not invoked.”
+- “The registry describes 71 source-backed capabilities; setup-required does
+  not mean connected.”
 - “The public OSS AgentRunner cannot mark a run `ok` without a trusted,
   persisted Truth receipt.”
 - “The existing Globus agent UI shows runner status and Truth verdict
@@ -581,6 +706,9 @@ credible when spoken directly.
 - “Every private production Globus workflow already emits receipts.”
 - “It eliminates hallucinations.”
 - “It is a trained truth model.”
+- “Globus has OpenClaw parity.”
+- “All 33 provider adapters are connected and ready on this install.”
+- “Every consequential Globus action is already controlled by Action Gate.”
 
 ## Demonstration commands
 
@@ -606,6 +734,19 @@ Ingest and store one receipt:
 
 ```bash
 python -m globus_truth ingest --db globus-truth.db receipt.json
+```
+
+Run the business-outcome challenge without the browser:
+
+```bash
+python -m globus_truth outcome-challenge --db globus-truth.db
+```
+
+Audit one decision against a persisted receipt:
+
+```bash
+python -m globus_truth gate --db globus-truth.db STORAGE_ID \
+  --action-id review-follow-ups --policy healthy_only
 ```
 
 ## Public links

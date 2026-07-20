@@ -24,6 +24,7 @@ globus-truth.db
 globus-truth.db-shm
 globus-truth.db-wal
 judge-artifacts/
+outcome-challenges/
 
 # Editor
 .vscode/

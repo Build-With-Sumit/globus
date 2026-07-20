@@ -1,9 +1,14 @@
-# Globus Truth Layer
+# Globus Mission Control and Truth Layer
 
 Globus Truth Layer is a zero-dependency, local reliability layer for agent fleets.
 Agents submit versioned run receipts; a deterministic evaluator checks the claim
 against timestamps, measured counts, evidence, heartbeats, and explicit checks
 before the run is allowed to look healthy.
+
+v0.13 adds **Mission Control** around that core: a source-backed platform
+capability registry, immutable fail-closed Action Gate decisions, and a
+credential-free business-outcome challenge that proves a contradictory
+destination read-back can prevent an action.
 
 It exists because fluent output is not the same thing as successful work. The
 pre-existing Globus fleet has seen quiet pipelines report all-clear, declared
@@ -41,9 +46,45 @@ python -m globus_truth ingest --db globus-truth.db receipt.json
 python -m globus_truth list --db globus-truth.db --limit 50
 python -m globus_truth load-demo --db globus-truth.db
 python -m globus_truth serve --db globus-truth.db
+python -m globus_truth outcome-challenge --db globus-truth.db
+python -m globus_truth gate --db globus-truth.db STORAGE_ID \
+  --action-id review-follow-ups --policy healthy_only
 ```
 
 Use `-` instead of a filename to read a receipt from standard input.
+
+The `gate` command exits `0` when authorized, `1` when blocked, and `2` for
+invalid input or an audit failure. `healthy_only` accepts only `healthy`;
+`trusted_completion` accepts `healthy` or `verified_no_work`.
+`outcome-challenge` prints the complete safe challenge report as JSON. Use
+`--artifact-root PATH` to choose where its generated per-run destination
+directories are written. It exits `0` only when `expectations_met` is exactly
+true; an incomplete proof exits `1`.
+
+## Verified business-outcome challenge
+
+Mission Control's **Run verified business workflow** button demonstrates the
+full evidence-to-action boundary using generated, de-identified local data:
+
+1. Create three follow-up rows in a separate per-run SQLite destination.
+2. Reopen that destination through an independent connection, sort and
+   canonicalize its rows, and measure the count and SHA-256.
+3. Persist a receipt for the 3 claimed → 3 observed result. It is `healthy`.
+4. Ask the Action Gate to apply `healthy_only`. The gate reads the persisted
+   verdict itself, audits an allow decision, and only then permits one bounded
+   local outbox insert.
+5. Delete exactly one generated destination row.
+6. Reopen and measure the destination again. The 3 claimed → 2 observed receipt
+   is `degraded_contradictory`.
+7. The gate audits a block decision and the second action callback is never
+   invoked. The outbox still contains exactly one row.
+
+The challenge uses no LLM, MySQL, external database, API key, provider account,
+Docker runtime, or network call. Its response contains generated IDs, a
+relative destination path, counts, hashes, verdicts, gate decisions, and action
+counts—not destination row payloads or absolute paths. The two receipts are
+honest sequential observations because the controlled action and row deletion
+occur between them.
 
 ## 60-second Evidence Lab
 
@@ -66,6 +107,10 @@ Docker runtime, or external network call. Both phase receipts are committed in
 one SQLite transaction; if either persistence fails, neither phase appears.
 
 ## Run the tests
+
+The v0.13 Truth/Mission Control suite contains 93 hermetic tests, including
+adversarial authorization, concurrency, privacy, HTTP, CLI, and real-runner
+coverage.
 
 ```bash
 python -m compileall -q globus_truth
@@ -186,6 +231,80 @@ external artifact or independently prove that an upstream system told the truth.
 For stronger provenance, producers should emit destination acknowledgements and
 content hashes that a downstream verifier controls.
 
+## Fail-closed Action Gate
+
+`ActionGate` converts a persisted, current Truth verdict into an auditable
+authorization decision. Its interface intentionally does not accept a
+caller-supplied verdict:
+
+```python
+decision = service.authorize_action(
+    storage_id="persisted-receipt-id",
+    action_id="review-follow-ups",
+    policy_id="healthy_only",
+)
+if decision["authorized"]:
+    perform_bounded_action()
+```
+
+The gate reads through `TruthService.get_run()`, so freshness is reevaluated
+before each decision. It binds the decision to the receipt storage ID, action
+ID, and policy. For an allow, the audit transaction rechecks the latest stored
+verdict and freshness deadline before inserting the immutable record. If
+another writer has already made that evidence stale or contradictory, the
+decision fails closed instead of recording a stale allow.
+There are two policies:
+
+| Policy | Allowed current verdicts |
+|---|---|
+| `healthy_only` | `healthy` |
+| `trusted_completion` | `healthy`, `verified_no_work` |
+
+Missing records, malformed or unavailable reads, `failed`,
+`degraded_contradictory`, and `stale` all block. `verified_no_work` blocks
+under `healthy_only`. If the decision cannot be durably audited, the gate
+raises an error and cannot authorize the action.
+
+The included outcome workflow also reads the returned decision back from the
+audit table and requires an exact field match before invoking its bounded
+action. A plausible-looking but unpersisted allow therefore cannot execute.
+
+An action decision contains only its generated decision ID, bound storage ID,
+action ID, policy, observed verdict, boolean authorization, reason codes, and
+timestamp. Exact retries are idempotent; conflicting content under the same
+decision ID is rejected, and database triggers prevent decision updates or
+deletes.
+
+## Source-backed capability registry
+
+[`platform-registry-v1.json`](platform-registry-v1.json) is the versioned
+Mission Control inventory. It contains 71 capability entries:
+
+| Kind | Current inventory |
+|---|---:|
+| Built-in agents | 4 |
+| LLM-facing tools | 20 |
+| Implemented/setup-required provider adapters | 33 |
+| Other connector, channel, and model-route entries | 14 |
+
+The 33 provider adapters are grouped into 9 lead-source, 8 verification,
+6 sender, and 10 CRM implementations. Each registry entry includes a source
+path/symbol, setup requirement, risk, approval mode, and read-back mode.
+
+The status is part of the contract:
+
+- `native`: implemented here and usable without configuring an external
+  provider for that capability itself.
+- `implemented/setup_required`: adapter code exists, but the operator must
+  configure the external account or service.
+- `bridge/catalog`: an integration seam or catalog entry exists; Globus does
+  not bundle the external bridge/service as a native connected capability.
+- `planned`: roadmap only, with no executable integration in this release.
+
+This is an honest capability map, not a connected-account screen and not a
+claim of OpenClaw feature parity. Loading and validation are data-only: they
+do not import provider modules, read credentials, or contact services.
+
 ## JSON API
 
 The server binds to `127.0.0.1` by default and sends no CORS permission. JSON request
@@ -202,6 +321,9 @@ keys/non-finite numbers, and use a fixed contract. Receipt text is displayed wit
 | `GET` | `/api/v1/samples` | Preview five safe, freshly timestamped sample receipts. |
 | `POST` | `/api/v1/samples/load` | Load samples; body must be `{}`. |
 | `POST` | `/api/v1/judge/challenge` | Run the credential-free real-byte tamper challenge; body must be `{}`. |
+| `POST` | `/api/v1/judge/outcome-gate` | Run the credential-free 3 → 3 allow/execute, then 3 → 2 block/prevent workflow; body must be `{}`. |
+| `GET` | `/api/v1/platform/capabilities` | Read the validated capability summary, entries, and graph. |
+| `GET` | `/api/v1/gate/decisions/{decision_id}` | Fetch one immutable Action Gate decision. |
 
 Example:
 
@@ -316,11 +438,13 @@ database server, cloud account, API key, or outbound network access is required.
 
 ## Built during OpenAI Build Week with Codex and GPT-5.6
 
-**Globus Truth Layer and its public OSS AgentRunner integration are the new work
-built during OpenAI Build Week with Codex and GPT-5.6.** The work includes the v1
-receipt contract, strict evaluator, SQLite audit repository, local dashboard/API,
-safe demo fixtures, real artifact verification, the credential-free Evidence
-Lab, visible verdict badges, 60 Truth Layer tests, and this documentation.
+**Globus Truth Layer, Mission Control, Action Gate, and the public OSS
+AgentRunner integration are the new work built during OpenAI Build Week with
+Codex and GPT-5.6.** The work includes the v1 receipt contract, strict
+evaluator, SQLite receipt and decision audit repositories, local dashboard/API,
+source-backed capability registry, safe fixtures, real artifact verification,
+the credential-free Evidence Lab and business-outcome challenge, visible
+verdict badges, adversarial tests, and this documentation.
 
 The broader Globus platform and its existing agent fleet predate this Build Week
 work. They were not built with Codex or GPT-5.6, and this repository does not claim

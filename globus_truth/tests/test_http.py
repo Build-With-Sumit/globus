@@ -60,6 +60,15 @@ class HttpTests(unittest.TestCase):
         self.assertIn("✓", decoded)
         self.assertIn("—", decoded)
         self.assertIn("Run live tamper challenge", decoded)
+        self.assertIn("Globus Mission Control", decoded)
+        self.assertIn("Verified AgentOS for organizations", decoded)
+        self.assertIn("4</strong><span>built-in agents", decoded)
+        self.assertIn("20</strong><span>LLM-facing tools", decoded)
+        self.assertIn("33</strong><span>implemented provider adapters", decoded)
+        self.assertIn("Implemented/setup required does not mean", decoded)
+        self.assertIn("Run verified business workflow", decoded)
+        self.assertIn("/api/v1/judge/outcome-gate", decoded)
+        self.assertIn("Inspect gate decision", decoded)
         self.assertIn("expected mismatch was not proven", decoded)
         self.assertEqual(headers["x-frame-options"], "DENY")
         self.assertIn("default-src 'none'", headers["content-security-policy"])
@@ -69,6 +78,38 @@ class HttpTests(unittest.TestCase):
         self.assertTrue(icon_headers["content-type"].startswith("image/svg+xml"))
         self.assertIn(b"<svg", icon_body)
         self.assertEqual(self.request("GET", "/favicon.ico")[0], 204)
+
+    def test_platform_capability_inventory_is_honest_and_safe(self) -> None:
+        status, _, body = self.request("GET", "/api/v1/platform/capabilities")
+        self.assertEqual(status, 200)
+        result = json.loads(body)
+        headline = result["summary"]["headline"]
+        self.assertEqual(headline["built_in_agents"], 4)
+        self.assertEqual(headline["llm_tools"], 20)
+        self.assertEqual(headline["implemented_provider_adapters"], 33)
+        self.assertIn("not claimed as connected", result["summary"]["disclosure"])
+        self.assertEqual(len(result["capabilities"]), 71)
+        self.assertGreater(len(result["graph"]["nodes"]), 71)
+
+        original = self.server.service.platform_capabilities
+
+        def fail_with_private_detail() -> dict:
+            raise RuntimeError("secret connection detail")
+
+        self.server.service.platform_capabilities = fail_with_private_detail
+        try:
+            failed_status, _, failed_body = self.request(
+                "GET",
+                "/api/v1/platform/capabilities",
+            )
+        finally:
+            self.server.service.platform_capabilities = original
+        self.assertEqual(failed_status, 500)
+        self.assertEqual(
+            json.loads(failed_body),
+            {"error": "platform capabilities unavailable safely"},
+        )
+        self.assertNotIn(b"secret connection detail", failed_body)
 
     def test_sample_load_populates_all_verdicts(self) -> None:
         status, _, body = self.request(
@@ -173,6 +214,116 @@ class HttpTests(unittest.TestCase):
             json.loads(failed_body),
             {"error": "judge challenge failed safely"},
         )
+
+    def test_outcome_gate_authorizes_then_blocks_from_real_readback(self) -> None:
+        status, _, body = self.request(
+            "POST",
+            "/api/v1/judge/outcome-gate",
+            "{}",
+            {"Content-Type": "application/json"},
+        )
+        self.assertEqual(status, 201)
+        result = json.loads(body)
+        self.assertTrue(result["credential_free"])
+        self.assertEqual(result["external_calls"], 0)
+        self.assertTrue(result["expectations_met"])
+        self.assertEqual(result["destination"]["claimed_follow_ups"], 3)
+        self.assertEqual(result["destination"]["before_observed"], 3)
+        self.assertEqual(result["destination"]["after_observed"], 2)
+
+        before, after = result["phases"]
+        self.assertEqual(before["name"], "before_change")
+        self.assertEqual(before["claimed_count"], 3)
+        self.assertEqual(before["observed_count"], 3)
+        self.assertEqual(before["verdict"], "healthy")
+        self.assertTrue(before["gate"]["authorized"])
+        self.assertTrue(before["gate"]["binding_valid"])
+        self.assertTrue(before["gate"]["audit_verified"])
+
+        self.assertEqual(after["name"], "after_change")
+        self.assertEqual(after["claimed_count"], 3)
+        self.assertEqual(after["observed_count"], 2)
+        self.assertEqual(after["verdict"], "degraded_contradictory")
+        self.assertFalse(after["gate"]["authorized"])
+        self.assertTrue(after["gate"]["binding_valid"])
+        self.assertTrue(after["gate"]["audit_verified"])
+
+        action = result["action"]
+        self.assertTrue(action["first_executed"])
+        self.assertFalse(action["second_executed"])
+        self.assertTrue(action["second_prevented"])
+        self.assertEqual(action["final_outbox_rows"], 1)
+
+        for phase, expected_authorized in ((before, True), (after, False)):
+            run_status, _, run_body = self.request(
+                "GET",
+                f"/api/v1/runs/{phase['storage_id']}",
+            )
+            self.assertEqual(run_status, 200)
+            self.assertEqual(
+                json.loads(run_body)["evaluation"]["verdict"],
+                phase["verdict"],
+            )
+            decision_status, _, decision_body = self.request(
+                "GET",
+                f"/api/v1/gate/decisions/{phase['gate']['decision_id']}",
+            )
+            self.assertEqual(decision_status, 200)
+            decision = json.loads(decision_body)
+            self.assertEqual(decision["decision_id"], phase["gate"]["decision_id"])
+            self.assertEqual(decision["storage_id"], phase["storage_id"])
+            self.assertIs(decision["authorized"], expected_authorized)
+
+        self.assertEqual(
+            self.request("GET", "/api/v1/gate/decisions/missing")[0],
+            404,
+        )
+        self.assertEqual(
+            self.request("GET", "/api/v1/gate/decisions/bad%2Fid")[0],
+            400,
+        )
+
+    def test_outcome_gate_strict_body_and_safe_failure(self) -> None:
+        headers = {"Content-Type": "application/json"}
+        invalid_status, _, invalid_body = self.request(
+            "POST",
+            "/api/v1/judge/outcome-gate",
+            '{"unexpected":true}',
+            headers,
+        )
+        self.assertEqual(invalid_status, 400)
+        self.assertIn("accepts only", json.loads(invalid_body)["error"])
+
+        null_status, _, null_body = self.request(
+            "POST",
+            "/api/v1/judge/outcome-gate",
+            "null",
+            headers,
+        )
+        self.assertEqual(null_status, 400)
+        self.assertIn("accepts only", json.loads(null_body)["error"])
+
+        original = self.server.service.run_outcome_gate_challenge
+
+        def fail_with_storage_error() -> dict:
+            raise sqlite3.OperationalError("private destination path")
+
+        self.server.service.run_outcome_gate_challenge = fail_with_storage_error
+        try:
+            failed_status, _, failed_body = self.request(
+                "POST",
+                "/api/v1/judge/outcome-gate",
+                "{}",
+                headers,
+            )
+        finally:
+            self.server.service.run_outcome_gate_challenge = original
+        self.assertEqual(failed_status, 500)
+        self.assertEqual(
+            json.loads(failed_body),
+            {"error": "outcome gate failed safely"},
+        )
+        self.assertNotIn(b"private destination path", failed_body)
 
     def test_changed_retry_returns_conflict(self) -> None:
         receipt = deepcopy(demo_receipts(NOW)[0])
