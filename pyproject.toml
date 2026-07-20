@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "globus"
-version = "0.11.0"
+version = "0.12.0"
 description = "Self-hosted private AI assistant — text + voice + agents over your data (Drive, Gmail, WhatsApp, Telegram, Teams, CRM). Per-member-isolated, Claude/DeepSeek-backed, AGPL-3.0."
 readme = "README.md"
 license = "AGPL-3.0-or-later"

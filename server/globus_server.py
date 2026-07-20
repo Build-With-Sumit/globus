@@ -1,9 +1,9 @@
-"""Globus — main HTTP server entrypoint (v0.11.0).
+"""Globus — main HTTP server entrypoint (v0.12.0).
 
 Run:
     python3 server/globus_server.py
 
-v0.11.0 ships cited text/voice chat, connected vault sources, the OSS agent
+v0.12.0 ships cited text/voice chat, connected vault sources, the OSS agent
 runner, and evidence-backed Truth Layer verdicts. See ROADMAP.md for the
 historical release slices and queued work.
 
@@ -409,7 +409,7 @@ def _deep_health():
                                        "claude-oauth")}
 
     return (200 if overall_ok else 503), {
-        "ok": overall_ok, "app": "globus", "v": "0.11.0",
+        "ok": overall_ok, "app": "globus", "v": "0.12.0",
         "checks": checks,
     }
 
@@ -419,7 +419,7 @@ def _deep_health():
 # ─────────────────────────────────────────────────────────────────────
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "globus/0.11.0"
+    server_version = "globus/0.12.0"
 
     def log_message(self, fmt, *args):
         return
@@ -995,7 +995,7 @@ class Handler(BaseHTTPRequestHandler):
             deep = bool((qs.get("deep") or [""])[0])
             if not deep:
                 return self._send_json(
-                    200, {"ok": True, "app": "globus", "v": "0.11.0"})
+                    200, {"ok": True, "app": "globus", "v": "0.12.0"})
             return self._send_json(*_deep_health())
 
         # Static assets
@@ -1670,7 +1670,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    print(f"globus/0.11.0 booting on {HOST}:{PORT}", flush=True)
+    print(f"globus/0.12.0 booting on {HOST}:{PORT}", flush=True)
     print(f"  site:     {SITE}", flush=True)
     print(f"  db:       {DB_CFG['user']}@{DB_CFG['host']}:{DB_CFG['port']}/"
           f"{DB_CFG['database']}", flush=True)

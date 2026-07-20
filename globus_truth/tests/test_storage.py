@@ -89,6 +89,14 @@ class StorageTests(unittest.TestCase):
         with self.assertRaises(ReceiptConflict):
             self.service.ingest(changed)
 
+        new_receipt = deepcopy(receipt)
+        new_receipt["receipt_id"] = "atomic-new-receipt"
+        new_receipt["run_id"] = "atomic-new-run"
+        with self.assertRaises(ReceiptConflict):
+            self.service.ingest_many([new_receipt, changed])
+        self.assertIsNone(self.service.get_run("atomic-new-receipt"))
+        self.assertEqual(self.service.summary()["total"], 1)
+
     def test_sql_metacharacters_remain_data(self) -> None:
         receipt = demo_receipts(NOW)[0]
         receipt["receipt_id"] = "safe:id"

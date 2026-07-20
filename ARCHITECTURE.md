@@ -118,7 +118,8 @@ agent_runner    ◄─── (OSS orchestrator + MySQL run row)
    └── globus_truth.agent_adapter
           ├── evaluator      (deterministic receipt verdict)
           ├── service        (ingest + stale-aware reads)
-          └── storage        (immutable SQLite history)
+          ├── storage        (immutable SQLite history)
+          └── judge_mode     (credential-free real-byte challenge)
 ```
 
 ## Data flow — one chat turn
@@ -168,6 +169,21 @@ agent_runner    ◄─── (OSS orchestrator + MySQL run row)
    console.
 9. Later reads automatically age an otherwise trusted receipt to `stale` after
    its freshness deadline; polling records history only if the verdict changes.
+
+## Data flow — credential-free Evidence Lab
+
+1. A default-loopback `POST /api/v1/judge/challenge` creates a unique controlled
+   manifest beside the Truth database using exclusive-create semantics.
+2. `judge_mode` calls the same `verify_artifact_readback()` primitive used by
+   the production AgentRunner adapter and persists a healthy receipt.
+3. It appends exactly one byte to the manifest.
+4. A new verification compares the changed file with the original size and
+   SHA-256.
+5. Both phase receipts commit in one SQLite transaction; either both become
+   visible or neither does.
+6. The dashboard shows both point-in-time observations. The response contains
+   generated IDs, a relative filename, measurements, hashes, and verdicts—no
+   member data or absolute filesystem paths.
 
 ## Data flow — one voice turn (ElevenLabs custom-LLM)
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import http.client
 import json
+import sqlite3
 import tempfile
 import threading
 import unittest
@@ -58,9 +59,16 @@ class HttpTests(unittest.TestCase):
         decoded = body.decode("utf-8")
         self.assertIn("✓", decoded)
         self.assertIn("—", decoded)
+        self.assertIn("Run live tamper challenge", decoded)
+        self.assertIn("expected mismatch was not proven", decoded)
         self.assertEqual(headers["x-frame-options"], "DENY")
         self.assertIn("default-src 'none'", headers["content-security-policy"])
         self.assertNotIn("innerHTML", DASHBOARD_HTML)
+        icon_status, icon_headers, icon_body = self.request("GET", "/favicon.svg")
+        self.assertEqual(icon_status, 200)
+        self.assertTrue(icon_headers["content-type"].startswith("image/svg+xml"))
+        self.assertIn(b"<svg", icon_body)
+        self.assertEqual(self.request("GET", "/favicon.ico")[0], 204)
 
     def test_sample_load_populates_all_verdicts(self) -> None:
         status, _, body = self.request(
@@ -93,6 +101,78 @@ class HttpTests(unittest.TestCase):
         status, _, body = self.request("GET", "/api/v1/runs/http-healthy-001")
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(body)["receipt"]["agent_id"], "fleet-http-test")
+
+    def test_live_judge_challenge_catches_one_byte_change(self) -> None:
+        status, _, body = self.request(
+            "POST",
+            "/api/v1/judge/challenge",
+            "{}",
+            {"Content-Type": "application/json"},
+        )
+        self.assertEqual(status, 201)
+        result = json.loads(body)
+        self.assertTrue(result["expectations_met"])
+        self.assertEqual(result["external_calls"], 0)
+        self.assertEqual(
+            [phase["verdict"] for phase in result["phases"]],
+            ["healthy", "degraded_contradictory"],
+        )
+        self.assertEqual(
+            result["artifact"]["final_bytes"],
+            result["artifact"]["expected_bytes"] + 1,
+        )
+        self.assertNotEqual(
+            result["artifact"]["expected_sha256"],
+            result["artifact"]["final_sha256"],
+        )
+        for phase in result["phases"]:
+            run_status, _, run_body = self.request(
+                "GET",
+                f"/api/v1/runs/{phase['storage_id']}",
+            )
+            self.assertEqual(run_status, 200)
+            self.assertEqual(
+                json.loads(run_body)["evaluation"]["verdict"],
+                phase["verdict"],
+            )
+
+        invalid_status, _, _ = self.request(
+            "POST",
+            "/api/v1/judge/challenge",
+            '{"unexpected":true}',
+            {"Content-Type": "application/json"},
+        )
+        self.assertEqual(invalid_status, 400)
+
+        null_status, _, null_body = self.request(
+            "POST",
+            "/api/v1/judge/challenge",
+            "null",
+            {"Content-Type": "application/json"},
+        )
+        self.assertEqual(null_status, 400)
+        self.assertIn("accepts only", json.loads(null_body)["error"])
+
+        original = self.server.service.run_judge_challenge
+
+        def fail_with_storage_error() -> dict:
+            raise sqlite3.OperationalError("database is locked")
+
+        self.server.service.run_judge_challenge = fail_with_storage_error
+        try:
+            failed_status, _, failed_body = self.request(
+                "POST",
+                "/api/v1/judge/challenge",
+                "{}",
+                {"Content-Type": "application/json"},
+            )
+        finally:
+            self.server.service.run_judge_challenge = original
+        self.assertEqual(failed_status, 500)
+        self.assertEqual(
+            json.loads(failed_body),
+            {"error": "judge challenge failed safely"},
+        )
 
     def test_changed_retry_returns_conflict(self) -> None:
         receipt = deepcopy(demo_receipts(NOW)[0])

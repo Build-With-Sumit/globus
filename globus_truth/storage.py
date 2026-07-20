@@ -168,68 +168,131 @@ class TruthRepository:
         Exact retries are idempotent. Reusing a receipt ID with different bytes is
         rejected instead of silently rewriting audit history.
         """
+        return self.save_many(
+            [
+                {
+                    "receipt": receipt,
+                    "evaluation": evaluation,
+                    "received_at": received_at,
+                    "fresh_until": fresh_until,
+                }
+            ]
+        )[0]
 
-        payload_json = _canonical_json(receipt)
-        storage_id = self.storage_id(receipt, payload_json)
-        receipt_id = receipt.get("receipt_id")
-        agent_id = receipt.get("agent_id")
-        run_id = receipt.get("run_id")
-        safe_receipt_id = receipt_id if isinstance(receipt_id, str) else storage_id
-        safe_agent_id = agent_id if isinstance(agent_id, str) else "(invalid)"
-        safe_run_id = run_id if isinstance(run_id, str) else "(invalid)"
+    def save_many(
+        self,
+        entries: list[Mapping[str, Any]],
+    ) -> list[tuple[str, bool]]:
+        """Persist several receipt/evaluation pairs in one SQLite transaction.
+
+        This powers multi-phase verification stories whose receipts must appear
+        together or not at all. Exact duplicate IDs inside or outside the batch
+        retain the same immutable-content and evaluation-history semantics as
+        :meth:`save`.
+        """
+        prepared: list[dict[str, Any]] = []
+        for entry in entries:
+            if not isinstance(entry, Mapping):
+                raise ValueError("invalid atomic receipt entry")
+            receipt = entry.get("receipt")
+            evaluation = entry.get("evaluation")
+            received_at = entry.get("received_at")
+            fresh_until = entry.get("fresh_until")
+            if (
+                not isinstance(receipt, Mapping)
+                or not isinstance(evaluation, Mapping)
+                or not isinstance(received_at, str)
+                or not received_at
+            ):
+                raise ValueError("invalid atomic receipt entry")
+            payload_json = _canonical_json(receipt)
+            storage_id = self.storage_id(receipt, payload_json)
+            receipt_id = receipt.get("receipt_id")
+            agent_id = receipt.get("agent_id")
+            run_id = receipt.get("run_id")
+            prepared.append(
+                {
+                    "storage_id": storage_id,
+                    "payload_json": payload_json,
+                    "receipt_id": (
+                        receipt_id if isinstance(receipt_id, str) else storage_id
+                    ),
+                    "agent_id": (
+                        agent_id if isinstance(agent_id, str) else "(invalid)"
+                    ),
+                    "run_id": run_id if isinstance(run_id, str) else "(invalid)",
+                    "received_at": received_at,
+                    "evaluation": evaluation,
+                    "fresh_until": fresh_until,
+                }
+            )
+
+        results: list[tuple[str, bool]] = []
         with self._lock, closing(self._connect()) as connection, connection:
-            existing = connection.execute(
-                "SELECT payload_json FROM receipts WHERE storage_id = ?",
-                (storage_id,),
-            ).fetchone()
-            created = existing is None
-            if existing is not None and existing["payload_json"] != payload_json:
-                raise ReceiptConflict(
-                    f"receipt_id {storage_id!r} already exists with different content"
-                )
-            if created:
+            for item in prepared:
+                storage_id = item["storage_id"]
+                payload_json = item["payload_json"]
+                existing = connection.execute(
+                    "SELECT payload_json FROM receipts WHERE storage_id = ?",
+                    (storage_id,),
+                ).fetchone()
+                created = existing is None
+                if existing is not None and existing["payload_json"] != payload_json:
+                    raise ReceiptConflict(
+                        f"receipt_id {storage_id!r} already exists with different content"
+                    )
+                if created:
+                    connection.execute(
+                        """
+                        INSERT INTO receipts
+                            (
+                                storage_id,
+                                receipt_id,
+                                agent_id,
+                                run_id,
+                                received_at,
+                                payload_json
+                            )
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            storage_id,
+                            item["receipt_id"],
+                            item["agent_id"],
+                            item["run_id"],
+                            item["received_at"],
+                            payload_json,
+                        ),
+                    )
+                evaluation = item["evaluation"]
                 connection.execute(
                     """
-                    INSERT INTO receipts
-                        (storage_id, receipt_id, agent_id, run_id, received_at, payload_json)
+                    INSERT INTO verdicts
+                        (
+                            storage_id,
+                            verdict,
+                            evaluated_at,
+                            fresh_until,
+                            reason_codes_json,
+                            checks_json
+                        )
                     VALUES (?, ?, ?, ?, ?, ?)
                     """,
                     (
                         storage_id,
-                        safe_receipt_id,
-                        safe_agent_id,
-                        safe_run_id,
-                        received_at,
-                        payload_json,
+                        evaluation["verdict"],
+                        evaluation["evaluated_at"],
+                        (
+                            item["fresh_until"]
+                            if evaluation["verdict"] in _TRUSTED_VERDICTS
+                            else None
+                        ),
+                        _canonical_json(evaluation["reason_codes"]),
+                        _canonical_json(evaluation["checks"]),
                     ),
                 )
-            connection.execute(
-                """
-                INSERT INTO verdicts
-                    (
-                        storage_id,
-                        verdict,
-                        evaluated_at,
-                        fresh_until,
-                        reason_codes_json,
-                        checks_json
-                    )
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    storage_id,
-                    evaluation["verdict"],
-                    evaluation["evaluated_at"],
-                    (
-                        fresh_until
-                        if evaluation["verdict"] in _TRUSTED_VERDICTS
-                        else None
-                    ),
-                    _canonical_json(evaluation["reason_codes"]),
-                    _canonical_json(evaluation["checks"]),
-                ),
-            )
-        return storage_id, created
+                results.append((storage_id, created))
+        return results
 
     def _refresh_due_verdicts(
         self,

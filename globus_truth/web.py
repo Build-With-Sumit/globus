@@ -13,6 +13,12 @@ from .storage import ReceiptConflict
 
 MAX_REQUEST_BYTES = 64 * 1024
 _SAFE_STORAGE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$")
+_REJECTED_JSON = object()
+FAVICON_SVG = b"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+<rect width="64" height="64" rx="16" fill="#0f1726"/>
+<path d="M17 33l10 10 20-24" fill="none" stroke="#51e6d1"
+ stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>"""
 
 DASHBOARD_HTML = r"""<!doctype html>
 <html lang="en">
@@ -20,6 +26,7 @@ DASHBOARD_HTML = r"""<!doctype html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Globus Truth Layer</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <style>
     :root{color-scheme:dark;--ink:#f5f7ff;--muted:#9aa4b8;--panel:#111827cc;
       --line:#263249;--bg:#070b14;--cyan:#51e6d1;--blue:#7aa2ff;--good:#54d69c;
@@ -40,8 +47,17 @@ DASHBOARD_HTML = r"""<!doctype html>
     .actions{display:flex;gap:10px;flex-wrap:wrap;margin:22px 0}
     button{border:1px solid var(--line);background:#151e30;color:var(--ink);padding:10px 14px;
       border-radius:10px;cursor:pointer;font-weight:700}
+    button:disabled{cursor:wait;opacity:.7;transform:none}
     button:hover{border-color:#50617e;transform:translateY(-1px)}
     button.primary{background:linear-gradient(120deg,#55dfcb,#78a7ff);color:#071019;border:0}
+    .lab{display:grid;grid-template-columns:1.4fr 1fr;gap:22px;align-items:center;padding:24px;
+      background:linear-gradient(135deg,#11292dee,#151c35ee);margin:24px 0}
+    .lab h2{font-size:25px;margin:5px 0 8px}.lab p{color:var(--muted);margin:0;max-width:650px}
+    .lab .actions{margin:17px 0 0}.lab-status{min-height:22px;color:var(--cyan);margin-top:9px}
+    .flow{display:grid;grid-template-columns:1fr 1fr;gap:9px}.flow-card{padding:12px;
+      background:#08111de6;border:1px solid #294058;border-radius:12px}
+    .flow-card b{display:block;color:var(--cyan);font-size:11px;letter-spacing:.08em;text-transform:uppercase}
+    .flow-card span{display:block;margin-top:3px;font-weight:750}
     .summary{display:grid;grid-template-columns:1.3fr repeat(3,1fr);gap:12px;margin:24px 0}
     .metric,.panel{border:1px solid var(--line);background:var(--panel);backdrop-filter:blur(16px);
       border-radius:16px;box-shadow:0 18px 70px #0005}
@@ -75,11 +91,16 @@ DASHBOARD_HTML = r"""<!doctype html>
     .detail small{display:block;color:var(--muted)}.check{display:flex;gap:10px;padding:11px 0;border-bottom:1px solid #202b3e}
     .check:last-child{border:0}.check b{color:var(--good)}.check.bad b{color:var(--bad)}
     .check div{overflow-wrap:anywhere}.close{padding:7px 11px}
+    .challenge-flow{display:grid;grid-template-columns:repeat(4,1fr);gap:9px;margin:18px 0}
+    .challenge-step{padding:14px;background:#0b1220;border:1px solid #26364f;border-radius:12px}
+    .challenge-step small{display:block;color:var(--muted);margin-bottom:4px}.hash{font-family:
+      ui-monospace,SFMono-Regular,Consolas,monospace;font-size:12px;overflow-wrap:anywhere}
     textarea{width:100%;min-height:220px;resize:vertical;background:#080e19;color:#dbe5ff;
       border:1px solid var(--line);border-radius:10px;padding:13px;font-family:ui-monospace,monospace;font-size:12px}
     .status{min-height:22px;color:var(--muted);margin-top:8px}.status.bad{color:var(--bad)}
     footer{color:var(--muted);font-size:12px;margin-top:20px;text-align:center}
-    @media(max-width:760px){header{display:block}.pulse{margin-top:18px}.summary{grid-template-columns:1fr 1fr}
+    @media(max-width:760px){header{display:block}.pulse{margin-top:18px}.lab{grid-template-columns:1fr}
+      .challenge-flow{grid-template-columns:1fr 1fr}.summary{grid-template-columns:1fr 1fr}
       .metric.hero{grid-column:1/-1}.toolbar{align-items:flex-start;flex-direction:column}.detail-grid{grid-template-columns:1fr}}
   </style>
 </head>
@@ -91,8 +112,22 @@ DASHBOARD_HTML = r"""<!doctype html>
       measurements, every quiet run proves it actually ran, and contradictions stay visible.</p></div>
     <div class="pulse"><i></i><span>localhost · private by default</span></div>
   </header>
+  <section class="lab panel">
+    <div><div class="eyebrow">60-second evidence lab</div><h2>Change one byte. Watch Globus catch it.</h2>
+      <p>Judge Mode writes a real local artifact, verifies it with the same read-back
+      primitive as the production AgentRunner, appends one controlled byte, and verifies again.
+      No model, account, API key, Docker, or external call.</p>
+      <div class="actions"><button class="primary" id="runChallenge">Run live tamper challenge</button></div>
+      <div class="lab-status" id="challengeStatus" role="status"></div></div>
+    <div class="flow" aria-label="Challenge flow">
+      <div class="flow-card"><b>01 · Write</b><span>Real local bytes</span></div>
+      <div class="flow-card"><b>02 · Verify</b><span>Healthy receipt</span></div>
+      <div class="flow-card"><b>03 · Change</b><span>Append one byte</span></div>
+      <div class="flow-card"><b>04 · Catch</b><span>Contradiction</span></div>
+    </div>
+  </section>
   <div class="actions">
-    <button class="primary" id="loadSamples">Load five safe scenarios</button>
+    <button id="loadSamples">Load five safe scenarios</button>
     <button id="showIngest">Ingest a receipt</button>
     <button id="refresh">Refresh</button>
   </div>
@@ -122,9 +157,16 @@ DASHBOARD_HTML = r"""<!doctype html>
   <div class="modal-body"><textarea id="receiptJson" spellcheck="false"
     aria-label="Receipt JSON"></textarea><div class="actions"><button class="primary" id="submitReceipt">
     Evaluate and persist</button></div><div class="status" id="ingestStatus"></div></div></dialog>
+<dialog id="challenge"><div class="modal-head"><div><div class="eyebrow">Live artifact proof</div>
+  <h2>One-byte tamper challenge</h2></div><button class="close" data-close="challenge">Close</button></div>
+  <div class="modal-body"><div id="challengeBody"></div><div class="actions">
+    <button id="inspectClean">Inspect healthy receipt</button>
+    <button id="inspectCaught">Inspect caught receipt</button>
+    <button id="downloadChallenge">Download challenge JSON</button>
+  </div></div></dialog>
 <script>
 "use strict";
-const $=id=>document.getElementById(id), state={runs:[]};
+const $=id=>document.getElementById(id), state={runs:[],challenge:null};
 const labels={healthy:"healthy",verified_no_work:"verified no-work",
   degraded_contradictory:"contradictory",failed:"failed",stale:"stale"};
 function el(tag,text,cls){const n=document.createElement(tag);if(text!==undefined)n.textContent=String(text);
@@ -157,6 +199,39 @@ function showDetail(item){const r=item.receipt||{},v=item.evaluation||{};$("deta
   for(const c of v.checks||[]){const d=el("div",undefined,"check"+(c.passed?"":" bad"));
     d.append(el("b",c.passed?"✓":"×"));const text=el("div");text.append(el("div",c.name),el("div",c.detail,"sub"));d.append(text);root.append(d)}
   $("detail").showModal()}
+function challengePhase(name){return (state.challenge?.phases||[]).find(p=>p.name===name)||{}}
+function shortHash(value){const text=String(value||"");return text?`${text.slice(0,16)}…`:"—"}
+function renderChallenge(report){state.challenge=report;const root=$("challengeBody");root.replaceChildren();
+  const artifact=report.artifact||{},clean=challengePhase("before_tamper"),caught=challengePhase("after_tamper");
+  root.append(el("span",report.expectations_met?"challenge passed":"challenge needs attention",
+    "badge "+(report.expectations_met?"healthy":"failed")));
+  root.append(el("div",`Challenge ${report.challenge_id||"unknown"} used real local bytes and ${report.external_calls??0} external calls.`,"status"));
+  const flow=el("div",undefined,"challenge-flow");
+  const before=artifact.expected_bytes,after=artifact.final_bytes;
+  const appended=Number.isInteger(before)&&Number.isInteger(after)?after-before:"?";
+  const steps=[
+    ["1 · Written",`${before??"?"} bytes`],
+    ["2 · Verified",labels[clean.verdict]||clean.verdict||"unknown"],
+    ["3 · Tampered",`+${appended} byte`],
+    [report.expectations_met?"4 · Caught":"4 · Result",labels[caught.verdict]||caught.verdict||"unknown"]];
+  for(const [label,value] of steps){const card=el("div",undefined,"challenge-step");
+    card.append(el("small",label),el("strong",value));flow.append(card)}root.append(flow);
+  const grid=el("div",undefined,"detail-grid");pair(grid,"Artifact",artifact.name);
+  pair(grid,"Before / after",`${before??"?"} / ${after??"?"} bytes`);
+  pair(grid,"Expected SHA-256",shortHash(artifact.expected_sha256));
+  pair(grid,"Observed after tamper",shortHash(artifact.final_sha256));root.append(grid);
+  root.append(el("div","What happened","section"),
+    el("div",report.expectations_met
+      ?"The first receipt remains an immutable point-in-time verification. The second re-verification records the changed bytes as a new contradictory receipt."
+      :"The challenge completed, but it did not prove the expected one-byte healthy-to-contradictory transition. Inspect both receipts before trusting the result.","sub"))}
+function inspectChallenge(name){const phase=challengePhase(name);
+  const item=state.runs.find(run=>run.storage_id===phase.storage_id);
+  if(!item)return alert("Receipt is not available in the current list.");
+  $("challenge").close();showDetail(item)}
+function downloadChallenge(){if(!state.challenge)return;const body=JSON.stringify(state.challenge,null,2);
+  const url=URL.createObjectURL(new Blob([body],{type:"application/json"}));const link=el("a");
+  link.href=url;link.download=`${state.challenge.challenge_id||"globus-truth-challenge"}.json`;
+  document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),0)}
 async function api(path,options){const res=await fetch(path,options);let data={};try{data=await res.json()}catch(_){}
   if(!res.ok)throw new Error(data.error||`HTTP ${res.status}`);return data}
 async function refresh(){try{const [summary,list]=await Promise.all([api("/api/v1/summary"),api("/api/v1/runs?limit=200")]);
@@ -166,6 +241,13 @@ async function refresh(){try{const [summary,list]=await Promise.all([api("/api/v
 $("loadSamples").addEventListener("click",async()=>{const b=$("loadSamples");b.disabled=true;try{
   await api("/api/v1/samples/load",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"});await refresh()}
   catch(e){alert(e.message)}finally{b.disabled=false}});
+$("runChallenge").addEventListener("click",async()=>{const b=$("runChallenge"),out=$("challengeStatus");
+  b.disabled=true;out.textContent="Writing, verifying, changing one byte, and verifying again…";try{
+    const report=await api("/api/v1/judge/challenge",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"});
+    await refresh();renderChallenge(report);out.textContent=report.expectations_met
+      ?"Caught: the changed artifact could not stay green."
+      :"Challenge completed, but the expected mismatch was not proven.";
+    $("challenge").showModal()}catch(e){out.textContent=`Challenge failed safely: ${e.message}`}finally{b.disabled=false}});
 $("refresh").addEventListener("click",refresh);
 $("showIngest").addEventListener("click",async()=>{if(!$("receiptJson").value){try{
   const data=await api("/api/v1/samples");$("receiptJson").value=JSON.stringify(data.receipts?.[0]||{},null,2)}catch(_){}}
@@ -174,6 +256,9 @@ $("submitReceipt").addEventListener("click",async()=>{const out=$("ingestStatus"
   try{const result=await api("/api/v1/receipts",{method:"POST",headers:{"Content-Type":"application/json"},
     body:$("receiptJson").value});out.textContent=`Stored: ${result.evaluation.verdict}`;await refresh()}
   catch(e){out.className="status bad";out.textContent=e.message}});
+$("inspectClean").addEventListener("click",()=>inspectChallenge("before_tamper"));
+$("inspectCaught").addEventListener("click",()=>inspectChallenge("after_tamper"));
+$("downloadChallenge").addEventListener("click",downloadChallenge);
 document.querySelectorAll("[data-close]").forEach(b=>b.addEventListener("click",()=>$(b.dataset.close).close()));
 refresh();
 </script>
@@ -272,6 +357,13 @@ class TruthRequestHandler(BaseHTTPRequestHandler):
             self._headers(200, "text/html; charset=utf-8", len(body))
             self.wfile.write(body)
             return
+        if path == "/favicon.svg":
+            self._headers(200, "image/svg+xml; charset=utf-8", len(FAVICON_SVG))
+            self.wfile.write(FAVICON_SVG)
+            return
+        if path == "/favicon.ico":
+            self._headers(204, "image/x-icon", 0)
+            return
         if path == "/api/v1/summary":
             self._json(200, self.server.service.summary())
             return
@@ -301,19 +393,19 @@ class TruthRequestHandler(BaseHTTPRequestHandler):
             return
         self._error(404, "not found")
 
-    def _read_json(self) -> Any | None:
+    def _read_json(self) -> Any:
         if "chunked" in (self.headers.get("Transfer-Encoding") or "").lower():
             self._error(400, "chunked request bodies are not accepted")
-            return None
+            return _REJECTED_JSON
         length_text = self.headers.get("Content-Length")
         if length_text is None:
             self._error(411, "Content-Length is required")
-            return None
+            return _REJECTED_JSON
         try:
             length = int(length_text)
         except ValueError:
             self._error(400, "invalid Content-Length")
-            return None
+            return _REJECTED_JSON
         if length < 0 or length > MAX_REQUEST_BYTES:
             # Drain one bounded request window before closing. This lets Windows
             # clients receive the 413 instead of seeing a reset while still
@@ -321,17 +413,17 @@ class TruthRequestHandler(BaseHTTPRequestHandler):
             if length > 0:
                 self.rfile.read(min(length, MAX_REQUEST_BYTES + 1))
             self._error(413, f"request body exceeds {MAX_REQUEST_BYTES} bytes")
-            return None
+            return _REJECTED_JSON
         data = self.rfile.read(length)
         content_type = (self.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
         if content_type != "application/json":
             self._error(415, "Content-Type must be application/json")
-            return None
+            return _REJECTED_JSON
         try:
             return _strict_json(data)
         except (UnicodeDecodeError, json.JSONDecodeError, ValueError, RecursionError):
             self._error(400, "request body is not strict UTF-8 JSON")
-            return None
+            return _REJECTED_JSON
 
     def do_POST(self) -> None:  # noqa: N802
         if not self._host_allowed():
@@ -339,7 +431,7 @@ class TruthRequestHandler(BaseHTTPRequestHandler):
             return
         path, _ = self._route()
         payload = self._read_json()
-        if payload is None:
+        if payload is _REJECTED_JSON:
             return
         if path == "/api/v1/receipts":
             if not isinstance(payload, Mapping):
@@ -360,6 +452,21 @@ class TruthRequestHandler(BaseHTTPRequestHandler):
                 self._error(400, "sample loader accepts only an empty JSON object")
                 return
             self._json(200, self.server.service.load_demo())
+            return
+        if path == "/api/v1/judge/challenge":
+            if payload != {}:
+                self._error(400, "judge challenge accepts only an empty JSON object")
+                return
+            try:
+                result = self.server.service.run_judge_challenge()
+            except Exception as exc:
+                print(
+                    "[truth-http] judge challenge failed safely: "
+                    f"{type(exc).__name__}"
+                )
+                self._error(500, "judge challenge failed safely")
+                return
+            self._json(201, result)
             return
         self._error(404, "not found")
 

@@ -1,7 +1,7 @@
 # Installing Globus
 
 > **Status: alpha.** The reference implementation runs in production at
-> buildwithsumit.com. This guide gets v0.11 running on your box — sign-in
+> buildwithsumit.com. This guide gets v0.12 running on your box — sign-in
 > via OTP, vault from Obsidian zip + Google Drive + Gmail + the
 > WhatsApp/Teams Chrome extension, text and voice chat (ElevenLabs;
 > see [`docs/voice-setup.md`](docs/voice-setup.md)), and a working
@@ -245,7 +245,7 @@ one specific team. Define your own.
 
 ```bash
 python3 server/globus_server.py
-# globus/0.11.0 booting on 127.0.0.1:8090
+# globus/0.12.0 booting on 127.0.0.1:8090
 #   site:     https://globus.example.com
 #   db:       globus@127.0.0.1:3306/globus
 #   llm:      claude-oauth

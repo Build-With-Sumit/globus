@@ -112,6 +112,48 @@ class TruthService:
             "evaluation": evaluation_data,
         }
 
+    def ingest_many(
+        self,
+        receipts: list[Mapping[str, Any] | Any],
+    ) -> list[dict[str, Any]]:
+        """Evaluate and persist several receipts atomically."""
+        if not isinstance(receipts, list) or not receipts:
+            raise ValueError("receipts must be a non-empty list")
+        now = self._now()
+        received_at = _iso(now)
+        prepared: list[dict[str, Any]] = []
+        evaluations: list[dict[str, Any]] = []
+        for receipt in receipts:
+            evaluation = evaluate_receipt(
+                receipt,
+                now=now,
+                stale_after=self.stale_after,
+            )
+            if not isinstance(receipt, Mapping):
+                raise ValueError("receipt must be a JSON object")
+            evaluation_data = evaluation.to_dict()
+            evaluations.append(evaluation_data)
+            prepared.append(
+                {
+                    "receipt": receipt,
+                    "evaluation": evaluation_data,
+                    "received_at": received_at,
+                    "fresh_until": self._fresh_until(
+                        receipt,
+                        evaluation_data,
+                    ),
+                }
+            )
+        saved = self.repository.save_many(prepared)
+        return [
+            {
+                "storage_id": storage_id,
+                "created": created,
+                "evaluation": evaluation,
+            }
+            for (storage_id, created), evaluation in zip(saved, evaluations)
+        ]
+
     def samples(self) -> list[dict[str, Any]]:
         return demo_receipts(self._now())
 
@@ -131,6 +173,15 @@ class TruthService:
 
     def verdict_history(self, storage_id: str) -> list[dict[str, Any]]:
         return self.repository.verdict_history(storage_id)
+
+    def run_judge_challenge(self, *, artifact_root: Any | None = None) -> dict[str, Any]:
+        """Run the offline, real-byte artifact tamper challenge."""
+        from .judge_mode import run_artifact_tamper_challenge
+
+        return run_artifact_tamper_challenge(
+            self,
+            artifact_root=artifact_root,
+        )
 
     def load_demo(self) -> dict[str, Any]:
         results = [self.ingest(receipt) for receipt in self.samples()]

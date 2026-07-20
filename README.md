@@ -48,7 +48,7 @@ without your sign-off.
 
 ## OpenAI Build Week: Globus Truth Layer
 
-![Globus Truth Layer dashboard](docs/assets/globus-truth-dashboard.png)
+![Globus Truth Layer Evidence Lab](docs/assets/globus-truth-evidence-lab.png)
 
 [`globus_truth/`](globus_truth/) is a new, self-contained reliability layer for
 the agent fleet. Agents emit versioned run receipts with measured counts,
@@ -68,6 +68,13 @@ does not call an external service. Its [README](globus_truth/README.md) document
 the receipt contract, API, integration path, supported platforms, limitations,
 and test command.
 
+For the fastest judge path, click **Run live tamper challenge**. Globus writes a
+real local artifact, verifies it with the same byte-count/SHA-256 primitive used
+by the production AgentRunner, appends exactly one controlled byte, and
+re-verifies it. The first point-in-time receipt is healthy; the second is
+contradictory, with the mismatched measurements visible in the Evidence Lab.
+The challenge is credential-free and makes zero external calls.
+
 The OSS agent runner is wired into that contract end to end. Once a run has a
 durable ledger ID, Globus reopens its artifact, verifies the byte count and
 SHA-256, scans the actual model reply for empty/refusal-like output, persists an
@@ -85,7 +92,7 @@ flowchart LR
     E --> G[Verdict in Globus UI]
 ```
 
-Run the complete hermetic repository check—including all 55 Truth Layer tests,
+Run the complete hermetic repository check—including all 60 Truth Layer tests,
 the real-runner adapter, UI rendering, broader workflow invariants, and public
 asset smoke tests—with:
 
@@ -191,7 +198,7 @@ Globus is opinionated. Bring your own:
 
 ## Status
 
-- **v0.11 (current)** — text + voice chat, vault from any combo of
+- **v0.12 (current)** — text + voice chat, vault from any combo of
   Obsidian zip / Google Drive / Gmail / WhatsApp Web / Microsoft Teams
   (the last two via a Chrome extension bridge), **plus a working agents
   subsystem**: 3 sample agents (research, sales-desk, infra-watch)
@@ -199,7 +206,9 @@ Globus is opinionated. Bring your own:
   ("run research"), the dashboard at `/members/globus/agents`, or
   cron via `scripts/run_agent.py`. Each brief lands as a per-member
   file on disk + a row in `globus_agent_runs`. A deployable public
-  Telegram ingestion daemon is still ahead — see [ROADMAP.md](ROADMAP.md).
+  Telegram ingestion daemon is still ahead. The credential-free Truth
+  Evidence Lab can also demonstrate a real one-byte artifact mismatch without
+  configuring MySQL or an LLM — see [ROADMAP.md](ROADMAP.md).
 - **Alpha** — works in production at buildwithsumit.com but every
   install will need hands-on setup. No managed-installer yet.
 - **Roadmap** is in [ROADMAP.md](ROADMAP.md). Voice cost/latency rebuild

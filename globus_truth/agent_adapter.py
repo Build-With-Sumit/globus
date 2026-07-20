@@ -152,6 +152,61 @@ def model_output_is_refusal_like(reply: str) -> bool:
     return any(pattern.search(text) for pattern in _ERROR_PROSE_PATTERNS)
 
 
+def verify_artifact_readback(
+    artifact_path: str | os.PathLike[str],
+    *,
+    expected_sha256: str,
+    expected_bytes: int,
+) -> dict[str, Any]:
+    """Reopen an artifact and compare its exact bytes with runner expectations.
+
+    This small, side-effect-free result is shared by the production AgentRunner
+    adapter and the credential-free Judge Mode challenge. It intentionally
+    returns only a basename and a typed error code, never an absolute path or
+    an operating-system error string.
+    """
+    path = Path(artifact_path)
+    artifact_bytes: bytes | None = None
+    error_code = ""
+    try:
+        artifact_bytes = path.read_bytes()
+    except OSError as exc:
+        error_code = type(exc).__name__[:100]
+
+    observed_bytes = len(artifact_bytes) if artifact_bytes is not None else 0
+    observed_sha256 = (
+        hashlib.sha256(artifact_bytes).hexdigest()
+        if artifact_bytes is not None
+        else ""
+    )
+    readback_ok = artifact_bytes is not None
+    size_matches = (
+        readback_ok
+        and isinstance(expected_bytes, int)
+        and not isinstance(expected_bytes, bool)
+        and expected_bytes >= 0
+        and observed_bytes == expected_bytes
+    )
+    sha256_matches = (
+        readback_ok
+        and isinstance(expected_sha256, str)
+        and bool(re.fullmatch(r"[0-9a-f]{64}", expected_sha256))
+        and observed_sha256 == expected_sha256
+    )
+    return {
+        "artifact_name": path.name,
+        "readback_ok": readback_ok,
+        "expected_bytes": expected_bytes,
+        "observed_bytes": observed_bytes,
+        "expected_sha256": expected_sha256,
+        "observed_sha256": observed_sha256,
+        "size_matches": bool(size_matches),
+        "sha256_matches": bool(sha256_matches),
+        "valid": bool(readback_ok and size_matches and sha256_matches),
+        "error_code": error_code,
+    }
+
+
 def _receipt_identity(
     email: str,
     agent_name: str,
@@ -244,31 +299,21 @@ def record_successful_agent_run(
     service = service or get_truth_service(database, work_dir=work_dir)
     observed_at = _iso(finished_at)
     path = Path(artifact_path)
-    artifact_bytes: bytes | None = None
-    read_error = ""
-    try:
-        artifact_bytes = path.read_bytes()
-    except OSError as exc:
-        read_error = f"{type(exc).__name__}: {exc}"
-
-    actual_bytes = len(artifact_bytes) if artifact_bytes is not None else 0
-    actual_sha256 = (
-        hashlib.sha256(artifact_bytes).hexdigest()
-        if artifact_bytes is not None
-        else ""
+    readback = verify_artifact_readback(
+        path,
+        expected_sha256=expected_sha256,
+        expected_bytes=expected_bytes,
     )
-    readback_ok = artifact_bytes is not None
-    size_matches = readback_ok and actual_bytes == expected_bytes
-    sha_matches = (
-        readback_ok
-        and bool(re.fullmatch(r"[0-9a-f]{64}", expected_sha256 or ""))
-        and actual_sha256 == expected_sha256
-    )
+    actual_bytes = readback["observed_bytes"]
+    actual_sha256 = readback["observed_sha256"]
+    readback_ok = readback["readback_ok"]
+    size_matches = readback["size_matches"]
+    sha_matches = readback["sha256_matches"]
 
     reply = (model_reply or "").strip()
     meaningful_reply = len(reply) >= MIN_MEANINGFUL_REPLY_CHARS
     refusal_free = not model_output_is_refusal_like(reply)
-    integrity_ok = bool(readback_ok and size_matches and sha_matches)
+    integrity_ok = readback["valid"]
 
     agent_id, receipt_run_id, receipt_id = _receipt_identity(
         email, agent_name, run_key
@@ -332,7 +377,14 @@ def record_successful_agent_run(
                 "detail": (
                     "Artifact was reopened after the write completed."
                     if readback_ok
-                    else f"Artifact read-back failed: {read_error[:800]}"
+                    else (
+                        "Artifact read-back failed"
+                        + (
+                            f" ({readback['error_code']})."
+                            if readback["error_code"]
+                            else "."
+                        )
+                    )
                 ),
             },
             {
@@ -498,4 +550,5 @@ __all__ = [
     "record_successful_agent_run",
     "truth_database_path",
     "truth_status_for_member",
+    "verify_artifact_readback",
 ]

@@ -511,7 +511,7 @@ without a human reading them is not a thing this project should hand out. What
 generalises — and what's here — is the record-keeping and the reply
 classification.
 
-## v0.11 (current) — Agent Truth Layer
+## v0.12 (current) — Agent Truth Layer + Evidence Lab
 
 The public AgentRunner now separates verified work from process completion
 instead of equating a successful model call with successful work.
@@ -533,8 +533,12 @@ instead of equating a successful model call with successful work.
   remains member-email scoped.
 - ✅ **Operator-visible status.** Agent and chat dashboards display compact
   Truth badges and reason-code tooltips beside the runner state.
+- ✅ **Credential-free Evidence Lab.** One click writes and verifies a real
+  local artifact with the production read-back primitive, appends exactly one
+  byte, then re-verifies it as contradictory. It needs no model, account,
+  credential, Docker runtime, or external network call.
 - ✅ **Judge-ready verification.** `python scripts/test_all.py` runs every
-  repository check in isolation; the Truth Layer itself has 55 hermetic tests.
+  repository check in isolation; the Truth Layer itself has 60 hermetic tests.
 - 📄 See [`globus_truth/README.md`](globus_truth/README.md) and
   [`docs/TRUTH_LAYER_BUILD_STORY.md`](docs/TRUTH_LAYER_BUILD_STORY.md).
 

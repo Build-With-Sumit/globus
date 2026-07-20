@@ -45,6 +45,26 @@ python -m globus_truth serve --db globus-truth.db
 
 Use `-` instead of a filename to read a receipt from standard input.
 
+## 60-second Evidence Lab
+
+The dashboard's **Run live tamper challenge** button performs a controlled
+experiment against real local bytes:
+
+1. Write a small generated manifest with exclusive-create semantics.
+2. Reopen it with the same read-back primitive used by the OSS AgentRunner.
+3. Persist a `healthy` point-in-time receipt with the measured size and SHA-256.
+4. Append exactly one byte.
+5. Reopen the file against the original expected measurements.
+6. Persist a new `degraded_contradictory` receipt whose failed size and hash
+   checks explain exactly what changed.
+
+This is a new re-verification, not a claim that the first immutable receipt
+changes after the fact. The generated artifact and receipts contain no member
+data. The response exposes only safe generated IDs, a relative filename,
+measurements, hashes, and verdicts. It needs no MySQL server, LLM, API key,
+Docker runtime, or external network call. Both phase receipts are committed in
+one SQLite transaction; if either persistence fails, neither phase appears.
+
 ## Run the tests
 
 ```bash
@@ -181,6 +201,7 @@ keys/non-finite numbers, and use a fixed contract. Receipt text is displayed wit
 | `POST` | `/api/v1/receipts` | Evaluate and persist one receipt. |
 | `GET` | `/api/v1/samples` | Preview five safe, freshly timestamped sample receipts. |
 | `POST` | `/api/v1/samples/load` | Load samples; body must be `{}`. |
+| `POST` | `/api/v1/judge/challenge` | Run the credential-free real-byte tamper challenge; body must be `{}`. |
 
 Example:
 
@@ -298,8 +319,8 @@ database server, cloud account, API key, or outbound network access is required.
 **Globus Truth Layer and its public OSS AgentRunner integration are the new work
 built during OpenAI Build Week with Codex and GPT-5.6.** The work includes the v1
 receipt contract, strict evaluator, SQLite audit repository, local dashboard/API,
-safe demo fixtures, real artifact verification, visible verdict badges, 55 Truth
-Layer tests, and this documentation.
+safe demo fixtures, real artifact verification, the credential-free Evidence
+Lab, visible verdict badges, 60 Truth Layer tests, and this documentation.
 
 The broader Globus platform and its existing agent fleet predate this Build Week
 work. They were not built with Codex or GPT-5.6, and this repository does not claim

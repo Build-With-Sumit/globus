@@ -173,6 +173,7 @@ The API supports:
 - Ingesting a receipt.
 - Previewing the safe scenarios.
 - Loading the safe scenarios.
+- Running the credential-free live artifact tamper challenge.
 
 The local service:
 
@@ -198,6 +199,26 @@ The dashboard shows:
 - Receipt measurements and evidence.
 - An ingest form for testing a receipt.
 - One-click loading of the five safe scenarios.
+- A 60-second Evidence Lab that writes, verifies, changes, and re-verifies
+  actual local bytes.
+
+#### The live one-byte challenge
+
+Judge Mode is not another pre-written fixture. It creates a unique local
+manifest with exclusive-create semantics and calls the same artifact read-back
+primitive used by the production AgentRunner adapter.
+
+The intact phase records the exact size and SHA-256 and persists a healthy
+receipt. Judge Mode then appends exactly one controlled byte and performs a
+second verification against the original measurements. That second immutable
+receipt becomes contradictory because both the size and digest checks fail.
+The two phase receipts commit in one SQLite transaction, so a persistence
+failure cannot leave only half of the challenge in the dashboard.
+
+The first receipt remains an honest point-in-time observation; the demo never
+claims that historical receipts change automatically. It needs no LLM, MySQL,
+credential, Docker runtime, or external call, and its API response contains
+only generated IDs, a relative filename, measurements, hashes, and verdicts.
 
 ### 8. A real Globus agent-runner bridge
 
@@ -233,13 +254,14 @@ They are de-identified, freshly timestamped, and require no credentials.
 
 ### 10. Automated tests
 
-The Truth Layer suite has 55 passing tests:
+The Truth Layer suite has 60 passing tests:
 
 - 18 evaluator tests.
-- 10 HTTP and dashboard tests.
+- 11 HTTP and dashboard tests.
 - 14 storage and automatic-aging tests.
 - 2 command-line tests.
 - 11 real AgentRunner adapter and isolation tests.
+- 4 real-byte Judge Mode tests.
 
 They test malformed receipts, impossible counts, future timestamps, stale
 heartbeats, missing evidence, failed checks, refusal text, strict JSON,
@@ -247,7 +269,8 @@ security headers, SQL metacharacters, immutable receipt IDs, idempotent retries,
 pagination, automatic persisted-receipt aging, artifact read-back and hashes,
 tenant-isolated status lookup, atomic concurrent stale transitions, large-fleet
 summaries, failed ledger commits, non-overwriting evidence files, persistence
-failures, and the complete five-verdict demo.
+failures, the complete five-verdict demo, and a real one-byte mutation that
+must flip a new verification from healthy to contradictory.
 
 The repository-level command also runs the wider Globus behavioural checks,
 visible-verdict rendering tests, public-asset smoke tests, and Python
@@ -270,6 +293,7 @@ Codex with GPT-5.6 helped translate those lessons into:
 - The service and command-line interface.
 - The JSON API.
 - The responsive dashboard.
+- The credential-free real-byte Evidence Lab.
 - The real OSS AgentRunner adapter and visible verdict integration.
 - Safe fixtures.
 - Adversarial tests.
@@ -300,6 +324,10 @@ They should not be represented as having been built with Codex or GPT-5.6.
 > The outcome is one of five explainable verdicts: healthy, verified no-work,
 > contradictory, failed, or stale.
 >
+> The fastest proof is Judge Mode. It writes a real artifact and verifies it
+> healthy, appends exactly one byte, and re-verifies it as contradictory using
+> the same read-back primitive as the production runner. No LLM or API key.
+>
 > Once the public Globus runner has a durable run ID, it writes the brief, reads
 > it back, verifies its SHA-256, and stores the receipt before the ledger can
 > become green. Identity or receipt-persistence failures fail closed.
@@ -310,12 +338,12 @@ They should not be represented as having been built with Codex or GPT-5.6.
 ### Reel screen cues
 
 1. Open on camera: “An agent saying done is making a claim.”
-2. Run one real public Globus agent.
-3. Show its brief, SHA-256 evidence, and Truth Layer badge.
-4. Cut to one receipt in JSON.
-5. Show the five verdict badges.
-6. Open one contradictory run and show its failed checks.
-7. Show the complete test suite passing in the terminal.
+2. Click **Run live tamper challenge**.
+3. Show the healthy receipt, the one-byte change, and the contradictory result.
+4. Show the before/after SHA-256 values.
+5. Briefly show one real public Globus agent and its Truth badge.
+6. Show the five verdict badges.
+7. Show all 60 Truth tests passing in the terminal.
 8. Close on camera with the final reliability-contract line.
 
 <!-- pagebreak -->
@@ -402,6 +430,25 @@ failed check and the evaluator’s reason code.
 > failed.
 
 **Screen cue:** Show all five safe scenario rows together.
+
+### The 60-second Evidence Lab
+
+> A judge should not need our LLM key or MySQL configuration to see the core
+> verification path work.
+>
+> So Judge Mode performs a real local experiment. It writes a generated
+> manifest, reopens the exact bytes, and records a healthy receipt with its
+> size and SHA-256.
+>
+> It then appends exactly one byte and performs a new verification against the
+> original measurements. The size and hash checks fail, so the second receipt
+> becomes contradictory.
+>
+> This reuses the production AgentRunner's artifact read-back primitive. It
+> makes zero external calls and stores no member data.
+
+**Screen cue:** Click the Evidence Lab button. Show the four steps, both hash
+values, and then open the healthy and contradictory receipts.
 
 ### Storage, API, and dashboard
 
@@ -494,17 +541,18 @@ credible when spoken directly.
 
 1. Globus product overview.
 2. Existing Agents dashboard.
-3. Truth Layer dashboard overview.
-4. Healthy receipt.
-5. Verified no-work receipt and its reason.
-6. Contradictory receipt with failed count or evidence checks.
-7. Failure receipt with explicit error detail.
-8. Stale receipt and freshness check.
-9. SQLite receipt records and latest verdicts, shown through the dashboard.
-10. JSON API response.
-11. Codex/GPT-5.6 build session.
-12. Terminal running the complete test suite.
-13. Public repository and one-command quick start.
+3. Evidence Lab before the click.
+4. Four-step one-byte challenge result and before/after hashes.
+5. Healthy receipt.
+6. Verified no-work receipt and its reason.
+7. Contradictory receipt with failed artifact checks.
+8. Failure receipt with explicit error detail.
+9. Stale receipt and freshness check.
+10. SQLite receipt records and latest verdicts, shown through the dashboard.
+11. JSON API response.
+12. Codex/GPT-5.6 build session.
+13. Terminal running all 60 Truth tests.
+14. Public repository and one-command quick start.
 
 ## Accuracy guide
 
@@ -517,6 +565,8 @@ credible when spoken directly.
 - “The module has five explainable verdicts.”
 - “The safe demo has no third-party packages, credentials, or outbound calls.”
 - “The full hermetic test command passes.”
+- “Judge Mode appends exactly one byte and catches it on a new verification.”
+- “The credential-free Evidence Lab uses the production artifact read-back primitive.”
 - “The public OSS AgentRunner cannot mark a run `ok` without a trusted,
   persisted Truth receipt.”
 - “The existing Globus agent UI shows runner status and Truth verdict

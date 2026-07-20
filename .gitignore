@@ -20,6 +20,10 @@ venv/
 *.log
 .coverage
 htmlcov/
+globus-truth.db
+globus-truth.db-shm
+globus-truth.db-wal
+judge-artifacts/
 
 # Editor
 .vscode/
