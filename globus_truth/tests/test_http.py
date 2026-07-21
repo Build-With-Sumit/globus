@@ -80,6 +80,12 @@ class HttpTests(unittest.TestCase):
         self.assertIn("Approve this exact action", decoded)
         self.assertIn("/api/v1/judge/approval-center/stage", decoded)
         self.assertIn("/api/v1/approvals?limit=100", decoded)
+        self.assertIn("v0.15 · Verified Action SDK", decoded)
+        self.assertIn("Create local email draft", decoded)
+        self.assertIn("Append local CRM note", decoded)
+        self.assertIn("Authorization boundary", decoded)
+        self.assertIn("Effect observed", decoded)
+        self.assertIn("/api/v1/judge/verified-actions/stage", decoded)
         self.assertEqual(headers["x-frame-options"], "DENY")
         self.assertIn("default-src 'none'", headers["content-security-policy"])
         self.assertNotIn("innerHTML", DASHBOARD_HTML)
@@ -539,6 +545,151 @@ class HttpTests(unittest.TestCase):
             {"error": "approval challenge failed safely"},
         )
         self.assertNotIn(b"private-provider-secret", failed_body)
+
+    def test_verified_action_sdk_http_lifecycle_and_timeline(self) -> None:
+        headers = {"Content-Type": "application/json"}
+        manifests_status, _, manifests_body = self.request(
+            "GET",
+            "/api/v1/verified-actions/manifests",
+        )
+        self.assertEqual(manifests_status, 200)
+        manifests = json.loads(manifests_body)
+        self.assertEqual(manifests["external_calls"], 0)
+        self.assertEqual(len(manifests["manifests"]), 2)
+        adapter_id = "globus.local.email-draft"
+
+        stage_status, _, stage_body = self.request(
+            "POST",
+            "/api/v1/judge/verified-actions/stage",
+            json.dumps({"adapter_id": adapter_id}),
+            headers,
+        )
+        self.assertEqual(stage_status, 201)
+        staged = json.loads(stage_body)
+        self.assertEqual(staged["status"], "pending")
+        self.assertEqual(staged["destination"]["observed_records"], 0)
+        self.assertEqual(staged["external_calls"], 0)
+        proposal_id = staged["proposal_id"]
+
+        pending_status, _, pending_body = self.request(
+            "GET",
+            f"/api/v1/verified-actions/{proposal_id}/timeline",
+        )
+        self.assertEqual(pending_status, 200)
+        pending = json.loads(pending_body)
+        self.assertEqual(len(pending["events"]), 6)
+        self.assertEqual(pending["state"], "pending")
+        self.assertFalse(pending["terminal"])
+
+        resolve_status, _, resolve_body = self.request(
+            "POST",
+            f"/api/v1/judge/verified-actions/{proposal_id}/approve",
+            "{}",
+            headers,
+        )
+        self.assertEqual(resolve_status, 200)
+        resolved = json.loads(resolve_body)
+        self.assertTrue(resolved["expectations_met"])
+        self.assertEqual(resolved["status"], "completed")
+        self.assertEqual(resolved["destination"]["observed_records"], 1)
+        self.assertTrue(resolved["destination"]["verified"])
+        self.assertEqual(resolved["external_calls"], 0)
+        self.assertTrue(resolved["timeline"]["integrity_complete"])
+        self.assertEqual(
+            [event["event_type"] for event in resolved["timeline"]["events"]],
+            [
+                "proposed",
+                "human_decision",
+                "truth_gate",
+                "execution_claimed",
+                "destination_verification",
+                "completed",
+            ],
+        )
+        self.assertEqual(
+            [event["outcome"] for event in resolved["timeline"]["events"]],
+            [
+                "recorded",
+                "approved",
+                "authorized",
+                "claimed",
+                "verified",
+                "succeeded",
+            ],
+        )
+        serialized = resolve_body.decode("utf-8")
+        self.assertNotIn("@example.test", serialized)
+        self.assertNotIn("This is a generated local draft", serialized)
+        self.assertNotIn(str(self.temp.name), serialized)
+
+    def test_verified_action_http_rejects_untrusted_shapes_and_fails_safely(
+        self,
+    ) -> None:
+        headers = {"Content-Type": "application/json"}
+        self.assertEqual(
+            self.request(
+                "POST",
+                "/api/v1/judge/verified-actions/stage",
+                "{}",
+                headers,
+            )[0],
+            400,
+        )
+        self.assertEqual(
+            self.request(
+                "POST",
+                "/api/v1/judge/verified-actions/stage",
+                json.dumps({"adapter_id": "network.email.send"}),
+                headers,
+            )[0],
+            400,
+        )
+        self.assertEqual(
+            self.request(
+                "GET",
+                "/api/v1/verified-actions/missing/timeline",
+            )[0],
+            404,
+        )
+        self.assertEqual(
+            self.request(
+                "GET",
+                "/api/v1/verified-actions/bad%2Fid/timeline",
+            )[0],
+            400,
+        )
+        self.assertEqual(
+            self.request(
+                "POST",
+                "/api/v1/judge/verified-actions/bad%2Fid/approve",
+                "{}",
+                headers,
+            )[0],
+            400,
+        )
+
+        original = self.server.service.stage_verified_action_lab
+
+        def fail_with_private_detail(*, adapter_id: str) -> dict:
+            del adapter_id
+            raise RuntimeError("password=private-provider-secret")
+
+        self.server.service.stage_verified_action_lab = fail_with_private_detail
+        try:
+            status, _, body = self.request(
+                "POST",
+                "/api/v1/judge/verified-actions/stage",
+                json.dumps({"adapter_id": "globus.local.crm-note"}),
+                headers,
+            )
+        finally:
+            self.server.service.stage_verified_action_lab = original
+        self.assertEqual(status, 500)
+        self.assertEqual(
+            json.loads(body),
+            {"error": "verified action stage failed safely"},
+        )
+        self.assertNotIn(b"private-provider-secret", body)
 
     def test_changed_retry_returns_conflict(self) -> None:
         receipt = deepcopy(demo_receipts(NOW)[0])

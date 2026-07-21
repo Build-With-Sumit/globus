@@ -51,12 +51,21 @@ without your sign-off.
 ![Globus Mission Control](docs/assets/globus-mission-control.png)
 
 [`globus_truth/`](globus_truth/) is a self-contained reliability and control
-layer for the agent fleet. v0.14 adds a **Consequence Firewall** to Mission
-Control: four built-in background agents now receive exact, deny-by-default
-tool grants. The orchestrator shows each agent only its granted tool schemas
-and rechecks every requested tool at dispatch, so a forged tool name cannot
-reach the dispatcher. These grants cover the four shipped agents, not every
-capability in the platform inventory.
+layer for the agent fleet. v0.15 adds a **Verified Action SDK**: one strict
+manifest and lifecycle for binding a request, obtaining authorization,
+performing an idempotent effect, reopening the destination independently, and
+recording verification before completion. Its two reference adapters create a
+generated local email draft and append a generated local CRM note in SQLite.
+They are provider-shaped demonstrations only: they use no account, credential,
+provider API, or outbound network, and neither sends an email nor updates a
+real CRM.
+
+The v0.14 **Consequence Firewall** remains part of Mission Control. Four
+built-in background agents receive exact, deny-by-default tool grants. The
+orchestrator shows each agent only its granted tool schemas and rechecks every
+requested tool at dispatch, so a forged tool name cannot reach the dispatcher.
+These grants cover the four shipped agents, not every capability in the
+platform inventory.
 
 The versioned v1 receipt contract supplies the foundation. Agents emit measured
 counts, timestamps, checks, heartbeats, and evidence references. A deterministic
@@ -64,7 +73,7 @@ evaluator returns one of five explainable verdicts: healthy, verified no-work,
 contradictory, failed, or stale. Receipts, verdict history, and immutable action
 decisions stay in local SQLite.
 
-The new Approval Center pauses an exact high-risk proposal for a person to
+The Approval Center pauses an exact high-risk proposal for a person to
 approve or reject. It stores IDs, policy metadata, timestamps, and SHA-256
 bindings—not the action payload. Human consent is necessary but never enough:
 execution still requires a fresh Truth verdict, an exact proposal hash, and a
@@ -82,7 +91,22 @@ documents the receipt contract, Consequence Firewall, Approval Center, Action
 Gate policies, API, CLI, integration path, supported platforms, limitations,
 and test command.
 
-For the fastest v0.14 judge path, click **Stage generated approval request**.
+For the fastest v0.15 judge path, click **Create local email draft** or
+**Append local CRM note**. Globus hashes an envelope containing the adapter
+identity, adapter version, action kind, and generated request; derives a stable
+idempotency key; and pauses before execution. Approve it to see the destination
+reopened through an independent read-only connection, the immutable
+verification persisted, and the six stages—proposal, human decision, Truth
+gate, execution claim, destination verification, and completion—derived from
+their source audit records. Rejecting it leaves the destination empty.
+
+<p align="center">
+  <a href="docs/assets/globus-verified-action-sdk.png"><img src="docs/assets/globus-verified-action-sdk.png" width="100%" alt="Globus Verified Action SDK with two generated-local reference adapters"></a>
+  <a href="docs/assets/globus-verified-action-timeline.png"><img src="docs/assets/globus-verified-action-timeline.png" width="92%" alt="Globus six-stage verified action execution timeline"></a>
+</p>
+
+The v0.14 judge path remains available through **Stage generated approval
+request**.
 The credential-free demo stages one generated high-risk local action and proves
 that nothing executes before the click. After approval it first tries a changed
 payload, which is blocked; then it executes the exact payload once after a
@@ -110,8 +134,9 @@ Globus then deletes exactly one generated row and repeats the read-back. The
 3 claimed → 2 observed receipt is contradictory, the gate blocks, and the
 second action callback is never invoked.
 
-Both judge workflows need no LLM, MySQL, provider account, credential, Docker
-runtime, or external call.
+All judge workflows need no LLM, MySQL, provider account, credential, Docker
+runtime, or external call. v0.15 is implemented and verified locally in this
+repository; it has not been deployed to the production Globus server.
 
 ![Globus verified Outcome Gate report](docs/assets/globus-outcome-gate.png)
 
@@ -146,6 +171,9 @@ flowchart LR
     G --> H[Fresh Truth recheck]
     H --> I[Unique local execution claim]
     I -->|exact + trusted| J[Bounded action]
+    J --> L[Independent destination read-back]
+    L --> M[Immutable verification]
+    M --> N[Completion]
     H -->|failed / contradictory / stale| K[Blocked + audited]
     I -->|changed or replayed| K
 ```
@@ -158,18 +186,25 @@ public asset smoke tests—with:
 python scripts/test_all.py
 ```
 
+The v0.15 release gate passes all **164 Truth/Mission Control tests** and all
+**11 repository-wide check groups**.
+
 For a camera-friendly explanation of what we built—including the exact Codex
 and GPT-5.6 contribution, a reel script, a longer YouTube script, screen cues,
 and accuracy guardrails—read
 [**The Globus Truth Layer build story**](docs/TRUTH_LAYER_BUILD_STORY.md).
+The currently linked Build Week demo video may predate v0.15; use the local
+dashboard or record fresh footage before claiming the video shows the Verified
+Action SDK and its six-stage timeline.
 
 **Scope disclosure:** Globus Truth Layer, Mission Control, Action Gate,
-Consequence Firewall, Approval Center, and the public OSS AgentRunner
-integration are the new work built during OpenAI Build Week with Codex and
-GPT-5.6. The broader Claude-native Globus platform and its existing agent fleet
-predate Build Week; this repository does not claim they were built with Codex
-or GPT-5.6. The capability registry is an inventory, not a claim that all 71
-entries are governed, connected, live, or at OpenClaw parity.
+Consequence Firewall, Approval Center, Verified Action SDK, its two local
+reference adapters, and the public OSS AgentRunner integration are the new work
+built during OpenAI Build Week with Codex and GPT-5.6. The broader
+Claude-native Globus platform and its existing agent fleet predate Build Week;
+this repository does not claim they were built with Codex or GPT-5.6. The
+capability registry is an inventory, not a claim that all 71 entries are
+governed, connected, live, or at OpenClaw parity.
 
 ## The brain
 
@@ -258,7 +293,7 @@ Globus is opinionated. Bring your own:
 
 ## Status
 
-- **v0.14 (current)** — text + voice chat, vault from any combo of
+- **v0.15 (current)** — text + voice chat, vault from any combo of
   Obsidian zip / Google Drive / Gmail / WhatsApp Web / Microsoft Teams
   (the last two via a Chrome extension bridge), **plus a working agents
   subsystem**: 4 built-in agents (Research, Sales Desk, Narada, and Infra Watch)
@@ -268,11 +303,17 @@ Globus is opinionated. Bring your own:
   file on disk + a row in `globus_agent_runs`. A deployable public
   Telegram ingestion daemon is still ahead. Mission Control now adds exact
   runtime tool grants for those four agents plus the payload-free Approval
-  Center and its credential-free changed/exact/replay proof. The v0.13
+  Center and its credential-free changed/exact/replay proof. The Verified
+  Action SDK adds strict manifests, manifest-bound request digests,
+  deterministic idempotency, independent destination read-back, immutable
+  verification records, and a six-stage derived timeline. Its email-draft and
+  CRM-note references operate only on generated local SQLite sandboxes; no
+  external provider is connected and v0.15 has not been production-deployed.
+  The v0.13
   source-backed registry, immutable Action Gate, verified-outcome challenge,
   and original one-byte Evidence Lab remain available—see
   [ROADMAP.md](ROADMAP.md).
-  v0.14 session cookies are bound to their issuing host; upgrading signs out
+  Since v0.14, session cookies are bound to their issuing host; upgrading signs out
   pre-v0.14 sessions once instead of accepting an unbound cookie.
 - **Alpha** — works in production at buildwithsumit.com but every
   install will need hands-on setup. No managed-installer yet.

@@ -59,6 +59,26 @@ DASHBOARD_HTML = r"""<!doctype html>
     .mission h2{font-size:clamp(25px,4vw,36px);letter-spacing:-.025em;margin:5px 0 9px}
     .mission p{color:var(--muted);margin:0;max-width:680px}
     .mission .actions{margin:18px 0 0}.mission-status{min-height:22px;color:var(--cyan);margin-top:8px}
+    .action-sdk{padding:26px;background:linear-gradient(135deg,#122f2bee,#201a42ee);margin:24px 0}
+    .action-sdk-top{display:grid;grid-template-columns:1.1fr .9fr;gap:28px;align-items:start}
+    .action-sdk h2{font-size:clamp(25px,4vw,38px);letter-spacing:-.025em;margin:5px 0 9px}
+    .action-sdk p{color:var(--muted);margin:0;max-width:720px}
+    .adapter-actions{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:18px}
+    .adapter-actions button{text-align:left;padding:14px}.adapter-actions button strong{display:block}
+    .adapter-actions button span{display:block;color:var(--muted);font-size:11px;margin-top:3px}
+    .adapter-actions button.primary span{color:#173047}
+    .verified-status{min-height:22px;color:var(--cyan);margin-top:10px}
+    .sdk-contract{display:grid;grid-template-columns:1fr 1fr;gap:9px}
+    .sdk-contract .detail{background:#07121ee6;border-color:#385063}
+    .execution-timeline{display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin:22px 0 4px}
+    .timeline-node{position:relative;min-width:0;padding:13px;background:#08111de6;
+      border:1px solid #33445e;border-radius:12px}
+    .timeline-node small{display:block;color:var(--cyan);font-weight:800;text-transform:uppercase;
+      letter-spacing:.06em}.timeline-node strong{display:block;margin-top:4px;overflow-wrap:anywhere}
+    .timeline-node .sub{overflow-wrap:anywhere}.timeline-node.pending{border-color:#76562d}
+    .timeline-node.failed,.timeline-node.blocked{border-color:#7c3040}
+    .timeline-node:not(:last-child)::after{content:"→";position:absolute;right:-8px;top:50%;z-index:2;
+      color:var(--cyan);font-weight:900;transform:translate(50%,-50%)}
     .firewall{padding:26px;background:linear-gradient(135deg,#162b31ee,#201a3bee);margin:24px 0}
     .firewall-top{display:grid;grid-template-columns:1.15fr .85fr;gap:28px;align-items:start}
     .firewall h2{font-size:clamp(25px,4vw,36px);letter-spacing:-.025em;margin:5px 0 9px}
@@ -117,6 +137,7 @@ DASHBOARD_HTML = r"""<!doctype html>
     dialog{width:min(760px,calc(100% - 28px));max-height:86vh;overflow:auto;color:var(--ink);
       background:#0f1726;border:1px solid #33415b;border-radius:18px;padding:0;box-shadow:0 30px 100px #000b}
     dialog::backdrop{background:#03060dcc;backdrop-filter:blur(4px)}
+    #verifiedAction{width:min(1120px,calc(100% - 28px))}
     .modal-head{position:sticky;top:0;background:#0f1726ed;backdrop-filter:blur(12px);display:flex;
       justify-content:space-between;gap:14px;padding:20px 22px;border-bottom:1px solid var(--line)}
     .modal-body{padding:22px}.modal-head h2{font-size:23px}
@@ -152,15 +173,16 @@ DASHBOARD_HTML = r"""<!doctype html>
       border:1px solid var(--line);border-radius:10px;padding:13px;font-family:ui-monospace,monospace;font-size:12px}
     .status{min-height:22px;color:var(--muted);margin-top:8px}.status.bad{color:var(--bad)}
     footer{color:var(--muted);font-size:12px;margin-top:20px;text-align:center}
-    @media(max-width:760px){header{display:block}.pulse{margin-top:18px}.mission-top,.firewall-top,.lab{grid-template-columns:1fr}
+    @media(max-width:760px){header{display:block}.pulse{margin-top:18px}.mission-top,.firewall-top,.action-sdk-top,.lab{grid-template-columns:1fr}
       .agent-flow{grid-template-columns:1fr}.agent-step:not(:last-child)::after{content:"↓";right:50%;top:auto;bottom:-9px}
       .control-flow{grid-template-columns:1fr}.control-step:not(:last-child)::after{content:"↓";right:50%;top:auto;bottom:-9px}
+      .execution-timeline{grid-template-columns:1fr}.timeline-node:not(:last-child)::after{content:"↓";right:50%;top:auto;bottom:-9px}
       .challenge-flow{grid-template-columns:1fr 1fr}.summary{grid-template-columns:1fr 1fr}
       .outcome-flow,.approval-result-grid{grid-template-columns:1fr}.approval-attempts{grid-template-columns:1fr}
       .metric.hero{grid-column:1/-1}
       .toolbar{align-items:flex-start;flex-direction:column}.detail-grid{grid-template-columns:1fr}}
     @media(max-width:420px){.shell{width:min(100% - 20px,1180px);padding-top:22px}
-      .mission,.firewall,.lab{padding:18px}.capabilities,.firewall-metrics,.approval-grid{grid-template-columns:1fr}
+      .mission,.firewall,.action-sdk,.lab{padding:18px}.capabilities,.firewall-metrics,.approval-grid,.adapter-actions,.sdk-contract{grid-template-columns:1fr}
       .summary{grid-template-columns:1fr}
       .metric.hero{grid-column:auto}.challenge-flow{grid-template-columns:1fr}.modal-body{padding:16px}}
   </style>
@@ -173,6 +195,43 @@ DASHBOARD_HTML = r"""<!doctype html>
       independently verify their outcomes before consequential actions can proceed.</p></div>
     <div class="pulse"><i></i><span>localhost · private by default</span></div>
   </header>
+  <section class="action-sdk panel" aria-labelledby="sdkTitle">
+    <div class="action-sdk-top">
+      <div><div class="eyebrow">v0.15 · Verified Action SDK</div>
+        <h2 id="sdkTitle">One action contract. Proof after the effect.</h2>
+        <p>Try two provider-shaped reference actions without connecting a provider.
+        Globus binds the generated request to an adapter manifest, pauses for exact
+        approval, executes under fresh Truth, independently reopens the local
+        destination, and records a six-stage integrity timeline.</p>
+        <div class="adapter-actions">
+          <button class="primary" id="stageEmailDraft"><strong>Create local email draft</strong>
+            <span>Generated recipient · never sent</span></button>
+          <button id="stageCrmNote"><strong>Append local CRM note</strong>
+            <span>Generated contact · no CRM call</span></button>
+        </div>
+        <div class="verified-status" id="verifiedActionStatus" role="status"></div>
+      </div>
+      <div>
+        <div class="sdk-contract" aria-label="Verified Action SDK contract">
+          <div class="detail"><small>Adapters</small><strong>2 local references</strong></div>
+          <div class="detail"><small>Provider calls</small><strong>0</strong></div>
+          <div class="detail"><small>Request binding</small><strong>Manifest + SHA-256</strong></div>
+          <div class="detail"><small>Completion rule</small><strong>Read-back required</strong></div>
+        </div>
+        <div class="disclosure">Email Draft and CRM Note are safe SQLite models of
+          provider operations. They demonstrate the SDK contract; they do not claim
+          that an email was sent or a CRM account was updated.</div>
+      </div>
+    </div>
+    <div class="execution-timeline" aria-label="Verified action execution timeline">
+      <div class="timeline-node"><small>01 · Propose</small><strong>Exact request hash</strong></div>
+      <div class="timeline-node"><small>02 · Decide</small><strong>Human approve/reject</strong></div>
+      <div class="timeline-node"><small>03 · Gate</small><strong>Fresh Truth</strong></div>
+      <div class="timeline-node"><small>04 · Claim</small><strong>Authorization boundary</strong></div>
+      <div class="timeline-node"><small>05 · Verify</small><strong>Effect observed</strong></div>
+      <div class="timeline-node"><small>06 · Complete</small><strong>Integrity result</strong></div>
+    </div>
+  </section>
   <section class="firewall panel" aria-labelledby="firewallTitle">
     <div class="firewall-top">
       <div><div class="eyebrow">Consequence Firewall · Human Approval Center</div>
@@ -267,6 +326,12 @@ DASHBOARD_HTML = r"""<!doctype html>
     No receipts yet. Load the safe scenarios or POST a receipt to the API.</div></section>
   <footer>All evaluation and storage happen on this machine. No external service is called.</footer>
 </main>
+<dialog id="verifiedAction"><div class="modal-head"><div><div class="eyebrow">Verified Action SDK</div>
+  <h2 id="verifiedActionTitle">Review provider-shaped action</h2></div>
+  <button class="close" data-close="verifiedAction">Close</button></div>
+  <div class="modal-body"><div id="verifiedActionBody"></div><div class="actions">
+    <button id="downloadVerifiedAction" hidden>Download verified action JSON</button>
+  </div></div></dialog>
 <dialog id="outcome"><div class="modal-head"><div><div class="eyebrow">Verified business outcome</div>
   <h2>Action Gate report</h2></div><button class="close" data-close="outcome">Close</button></div>
   <div class="modal-body"><div id="outcomeBody"></div><div class="actions">
@@ -298,7 +363,7 @@ DASHBOARD_HTML = r"""<!doctype html>
 <script>
 "use strict";
 const $=id=>document.getElementById(id), state={runs:[],challenge:null,outcome:null,
-  approval:null,approvals:[],platform:null};
+  approval:null,approvals:[],platform:null,verifiedAction:null};
 const labels={healthy:"healthy",verified_no_work:"verified no-work",
   degraded_contradictory:"contradictory",failed:"failed",stale:"stale"};
 function el(tag,text,cls){const n=document.createElement(tag);if(text!==undefined)n.textContent=String(text);
@@ -399,6 +464,93 @@ function downloadOutcome(){if(!state.outcome)return;const body=JSON.stringify(st
   document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),0)}
 function firstValue(...values){for(const value of values){if(value!==undefined&&value!==null&&value!=="")return value}
   return undefined}
+const verifiedEventLabels={proposed:"Proposed",human_decision:"Human decision",
+  truth_gate:"Truth Gate",execution_claimed:"Execution claim",
+  destination_verification:"Destination read-back",completed:"Completion"};
+function verifiedOutcomeClass(outcome){return ["recorded","approved","authorized","claimed","verified","succeeded"]
+  .includes(outcome)?"healthy":["rejected","blocked","failed"].includes(outcome)?"failed":"pending"}
+function renderExecutionTimeline(timeline){const flow=el("div",undefined,"execution-timeline");
+  for(const event of timeline?.events||[]){const outcome=String(event.outcome||"pending"),
+      card=el("div",undefined,`timeline-node ${verifiedOutcomeClass(outcome)}`);
+    card.append(el("small",`${String(event.sequence||"?").padStart(2,"0")} · ${
+      verifiedEventLabels[event.event_type]||event.event_type||"Stage"}`),
+      el("strong",outcome.replaceAll("_"," ")),
+      el("div",event.event_type==="execution_claimed"&&outcome==="claimed"
+        ?"Authorization boundary"
+        :event.event_type==="destination_verification"&&outcome==="verified"
+          ?"Effect observed independently"
+          :(event.reason_codes||[]).map(code=>String(code).replaceAll("_"," ")).join(", ")
+            ||"Awaiting prior stage","sub"));
+    if(event.occurred_at)card.append(el("div",fmt(event.occurred_at),"sub"));
+    if(event.evidence_sha256)card.append(el("div",shortHash(event.evidence_sha256),"sub hash"));
+    flow.append(card)}return flow}
+function renderVerifiedAction(report){state.verifiedAction=report;const root=$("verifiedActionBody");
+  root.replaceChildren();const pending=report.status==="pending",rejected=report.status==="rejected",
+    complete=report.expectations_met===true,proposal=report.proposal||{},manifest=report.manifest||{},
+    destination=report.destination||{},timeline=report.timeline||{};
+  $("verifiedActionTitle").textContent=pending?"Review provider-shaped action":
+    rejected?"Action rejected safely":"Verified action timeline";
+  $("downloadVerifiedAction").hidden=pending;
+  root.append(el("span",pending?"awaiting human review":rejected?"rejected":complete?"integrity verified":"needs attention",
+    `badge ${pending?"pending":rejected?"failed":complete?"healthy":"degraded_contradictory"}`));
+  root.append(el("div",pending
+    ?"Nothing has executed. Approval applies only to the manifest-bound request fingerprint."
+    :rejected
+      ?"The generated action remained unclaimed and the local destination stayed unchanged."
+      :complete
+        ?"The exact action passed fresh Truth, executed once, and was independently observed before completion."
+        :"A claim without complete destination proof is indeterminate and is not safe to retry.","approval-callout"));
+  const grid=el("div",undefined,"approval-grid");
+  approvalDetail(grid,"Adapter",`${firstValue(manifest.id,proposal.adapter_id,"unknown")} · ${
+    firstValue(manifest.version,proposal.adapter_version,"?")}`);
+  approvalDetail(grid,"Action",firstValue(manifest.action_kind,proposal.action_kind,proposal.action_id));
+  approvalDetail(grid,"Risk / policy",`${firstValue(manifest.risk,proposal.risk,"?")} · ${
+    firstValue(manifest.policy,proposal.policy,"?")}`);
+  approvalDetail(grid,"Scope",proposal.scope);
+  approvalDetail(grid,"Payload binding",proposal.payload_sha256,"hash");
+  approvalDetail(grid,"Destination",`${firstValue(destination.mode,"generated local")} · ${
+    destination.observed_records??0} observed`);
+  approvalDetail(grid,"Provider connected",destination.provider_connected===true?"yes":"no");
+  approvalDetail(grid,"External calls",report.external_calls??0);root.append(grid);
+  root.append(el("div","Six-stage integrity timeline","section"),renderExecutionTimeline(timeline));
+  if(timeline.legacy_unverified===true)root.append(el("div",
+    "This older completion has no destination-verification record and is not represented as verified.","status bad"));
+  if(pending){const actions=el("div",undefined,"actions"),
+      approve=el("button","Approve exact local action","primary"),
+      reject=el("button","Reject and keep blocked");
+    approve.addEventListener("click",()=>resolveVerifiedAction(report,"approved",approve,reject));
+    reject.addEventListener("click",()=>resolveVerifiedAction(report,"rejected",approve,reject));
+    actions.append(approve,reject);root.append(actions)}
+  root.append(el("div","Generated local adapters only. Email is not sent and no CRM provider is contacted.","status"))}
+async function resolveVerifiedAction(report,disposition,...buttons){const proposalId=report.proposal_id;
+  if(!proposalId)return;for(const button of buttons)button.disabled=true;
+  $("verifiedActionStatus").textContent=disposition==="approved"
+    ?"Checking fresh Truth, executing once, and independently reading the destination…"
+    :"Rejecting the exact request without executing it…";
+  try{const resolved=await api(`/api/v1/judge/verified-actions/${encodeURIComponent(proposalId)}/${
+      disposition==="approved"?"approve":"reject"}`,
+      {method:"POST",headers:{"Content-Type":"application/json"},body:"{}"});
+    renderVerifiedAction(resolved);$("verifiedActionStatus").textContent=resolved.expectations_met===true
+      ?(disposition==="approved"
+        ?"Verified: the destination effect was observed before completion; replay stayed blocked."
+        :"Rejected: zero destination effects.")
+      :"Resolved fail-closed; inspect the integrity timeline.";
+    await Promise.all([refresh(),loadApprovals()])}
+  catch(e){$("verifiedActionStatus").textContent=`Verified action failed safely: ${e.message}`;
+    for(const button of buttons)button.disabled=false}}
+async function stageVerifiedAction(adapterId,button){const out=$("verifiedActionStatus");
+  button.disabled=true;out.textContent="Validating the adapter manifest and staging an exact local request…";
+  try{const report=await api("/api/v1/judge/verified-actions/stage",
+      {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({adapter_id:adapterId})});
+    renderVerifiedAction(report);out.textContent="Paused safely: zero effects before human review.";
+    $("verifiedAction").showModal();await loadApprovals()}
+  catch(e){out.textContent=`Verified action request failed safely: ${e.message}`}
+  finally{button.disabled=false}}
+function downloadVerifiedAction(){if(!state.verifiedAction)return;
+  const body=JSON.stringify(state.verifiedAction,null,2),
+    url=URL.createObjectURL(new Blob([body],{type:"application/json"})),link=el("a");
+  link.href=url;link.download=`${state.verifiedAction.proposal_id||"globus-verified-action"}.json`;
+  document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),0)}
 function approvalProposal(report){const candidate=report?.proposal||report?.request||report||{};
   return candidate&&typeof candidate==="object"?candidate:{}}
 function approvalTruth(source){const truth=source?.truth||source?.receipt||{};
@@ -639,6 +791,10 @@ $("stageApproval").addEventListener("click",async()=>{const b=$("stageApproval")
     $("approval").showModal();await loadApprovals()}
   catch(e){out.textContent=`Approval request failed safely: ${e.message}`}
   finally{b.disabled=false}});
+$("stageEmailDraft").addEventListener("click",()=>stageVerifiedAction(
+  "globus.local.email-draft",$("stageEmailDraft")));
+$("stageCrmNote").addEventListener("click",()=>stageVerifiedAction(
+  "globus.local.crm-note",$("stageCrmNote")));
 $("refresh").addEventListener("click",()=>Promise.all([refresh(),loadPlatform(),loadApprovals()]));
 $("showIngest").addEventListener("click",async()=>{if(!$("receiptJson").value){try{
   const data=await api("/api/v1/samples");$("receiptJson").value=JSON.stringify(data.receipts?.[0]||{},null,2)}catch(_){}}
@@ -652,6 +808,7 @@ $("inspectCaught").addEventListener("click",()=>inspectChallenge("after_tamper")
 $("downloadChallenge").addEventListener("click",downloadChallenge);
 $("downloadOutcome").addEventListener("click",downloadOutcome);
 $("downloadApproval").addEventListener("click",downloadApproval);
+$("downloadVerifiedAction").addEventListener("click",downloadVerifiedAction);
 document.querySelectorAll("[data-close]").forEach(b=>b.addEventListener("click",()=>$(b.dataset.close).close()));
 Promise.all([refresh(),loadPlatform(),loadApprovals()]);
 </script>
@@ -799,6 +956,45 @@ class TruthRequestHandler(BaseHTTPRequestHandler):
                 self._error(500, "platform capabilities unavailable safely")
                 return
             self._json(200, capabilities)
+            return
+        if path == "/api/v1/verified-actions/manifests":
+            try:
+                manifests = self.server.service.verified_action_manifests()
+                if not isinstance(manifests, Mapping):
+                    raise TypeError("verified action manifests unavailable")
+            except Exception as exc:
+                print(
+                    "[truth-http] verified action manifests failed safely: "
+                    f"{type(exc).__name__}"
+                )
+                self._error(500, "verified action manifests unavailable safely")
+                return
+            self._json(200, manifests)
+            return
+        timeline_match = re.fullmatch(
+            r"/api/v1/verified-actions/([^/]+)/timeline",
+            path,
+        )
+        if timeline_match is not None:
+            proposal_id = unquote(timeline_match.group(1))
+            if not _SAFE_PROPOSAL_ID.fullmatch(proposal_id):
+                self._error(400, "invalid verified action identifier")
+                return
+            try:
+                timeline = self.server.service.get_verified_action_timeline(
+                    proposal_id
+                )
+            except Exception as exc:
+                print(
+                    "[truth-http] verified action timeline failed safely: "
+                    f"{type(exc).__name__}"
+                )
+                self._error(500, "verified action timeline unavailable safely")
+                return
+            if timeline is None:
+                self._error(404, "verified action timeline not found")
+            else:
+                self._json(200, timeline)
             return
         if path.startswith("/api/v1/gate/decisions/"):
             decision_id = unquote(
@@ -1048,6 +1244,75 @@ class TruthRequestHandler(BaseHTTPRequestHandler):
                 self._error(500, "approval challenge failed safely")
                 return
             self._json(201, result)
+            return
+        if path == "/api/v1/judge/verified-actions/stage":
+            if (
+                not isinstance(payload, Mapping)
+                or set(payload) != {"adapter_id"}
+                or not isinstance(payload.get("adapter_id"), str)
+            ):
+                self._error(
+                    400,
+                    "verified action stage requires one adapter_id",
+                )
+                return
+            try:
+                result = self.server.service.stage_verified_action_lab(
+                    adapter_id=payload["adapter_id"],
+                )
+                if not isinstance(result, Mapping):
+                    raise TypeError("verified action stage unavailable")
+            except ValueError:
+                self._error(400, "verified action adapter is unsupported")
+                return
+            except Exception as exc:
+                print(
+                    "[truth-http] verified action stage failed safely: "
+                    f"{type(exc).__name__}"
+                )
+                self._error(500, "verified action stage failed safely")
+                return
+            self._json(201, result)
+            return
+        verified_action_match = re.fullmatch(
+            r"/api/v1/judge/verified-actions/([^/]+)/(approve|reject)",
+            path,
+        )
+        if verified_action_match is not None:
+            if payload != {}:
+                self._error(
+                    400,
+                    "verified action resolution accepts only an empty JSON object",
+                )
+                return
+            proposal_id = unquote(verified_action_match.group(1))
+            if not _SAFE_PROPOSAL_ID.fullmatch(proposal_id):
+                self._error(400, "invalid verified action identifier")
+                return
+            action = verified_action_match.group(2)
+            try:
+                result = self.server.service.resolve_verified_action_lab(
+                    proposal_id,
+                    disposition=(
+                        "approved" if action == "approve" else "rejected"
+                    ),
+                )
+                if not isinstance(result, Mapping):
+                    raise TypeError("verified action resolution unavailable")
+            except FileNotFoundError:
+                self._error(404, "verified action request not found")
+                return
+            except ValueError:
+                self._error(400, "verified action request is invalid")
+                return
+            except Exception as exc:
+                print(
+                    "[truth-http] verified action resolution failed safely: "
+                    f"{type(exc).__name__}"
+                )
+                self._error(500, "verified action resolution failed safely")
+                return
+            self._json(200, result)
             return
         approval_match = re.fullmatch(
             r"/api/v1/judge/approval-center/([^/]+)/(approve|reject)",

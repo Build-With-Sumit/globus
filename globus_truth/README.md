@@ -5,11 +5,13 @@ Agents submit versioned run receipts; a deterministic evaluator checks the claim
 against timestamps, measured counts, evidence, heartbeats, and explicit checks
 before the run is allowed to look healthy.
 
-v0.14 adds a **Consequence Firewall** around the v0.13 Mission Control core.
-Four built-in background agents receive exact, deny-by-default runtime tool
-grants, and high-risk actions can pause in a payload-free Approval Center.
-Human approval remains subordinate to a fresh Truth verdict immediately before
-a unique local execution claim.
+v0.15 adds a **Verified Action SDK** around the v0.14 Consequence Firewall.
+It binds each strict adapter manifest and exact request into one SHA-256,
+derives a deterministic idempotency key, and requires independent destination
+read-back plus an immutable verification record before a verified action can
+complete. Two generated-only local SQLite references model creating an email
+draft and appending a CRM note. They do not connect to a provider, send an
+email, or update an external CRM.
 
 It exists because fluent output is not the same thing as successful work. The
 pre-existing Globus fleet has seen quiet pipelines report all-clear, declared
@@ -83,6 +85,66 @@ python -m globus_truth approval-challenge --db globus-truth.db \
 The generic approval commands create, inspect, approve, and reject exact
 proposals. They do not expose a generic execution command or dispatch an
 arbitrary callback.
+
+## Verified Action SDK
+
+The SDK turns the v0.14 approval boundary into a reusable, fail-closed action
+lifecycle. An adapter must publish one exact manifest with:
+
+- A stable adapter ID, semantic version, and allowlisted action kind.
+- Risk, Truth policy, and explicit approval mode.
+- A deny-by-default permission set.
+- The deterministic idempotency strategy.
+- An independent read-back mode.
+
+Unknown fields, action kinds, permissions, approval modes, idempotency
+strategies, and read-back modes are rejected. Payloads must be strict canonical
+JSON and cannot contain floats or exceed the bounded size. The request digest
+hashes an envelope containing the adapter ID, adapter version, action kind, and
+exact payload. A payload cannot therefore be silently moved to a different
+adapter or adapter version while retaining its binding.
+
+The execution lifecycle is:
+
+1. Validate the manifest and generated request, then prepare a payload-free
+   binding.
+2. Pause on an exact Approval Center proposal.
+3. Recheck current persisted Truth through the Action Gate.
+4. Create the unique local execution claim.
+5. Execute with a deterministic idempotency key.
+6. Open a new query-only destination connection and verify the observed row.
+7. Persist an immutable verification bound to proposal, claim, adapter,
+   request digest, idempotency-key digest, and observation digest.
+8. Record completion only when its outcome agrees with destination
+   verification.
+
+The public timeline does not maintain a mutable duplicate event log. It derives
+six fixed stages from one SQLite read snapshot: **proposed → human decision →
+Truth gate → execution claimed → destination verification → completed**. A
+claim without destination proof remains `indeterminate`; it is not presented
+as success and is not automatically retried. Older completed Approval Center
+records without v0.15 destination verification are explicitly identified as
+legacy and unverified.
+
+### Safe reference adapters
+
+The dashboard exposes two provider-shaped examples:
+
+| Adapter | Local effect | Explicit non-claim |
+|---|---|---|
+| `globus.local.email-draft` | Creates one generated draft row in a generated SQLite sandbox. | No email is sent and no mailbox is connected. |
+| `globus.local.crm-note` | Appends one generated note row in a generated SQLite sandbox. | No CRM account is connected or updated. |
+
+Both use independently opened SQLite read-back connections, deterministic
+idempotency, and generated data only. The lifecycle reports identifiers,
+counts, reason codes, and hashes rather than the draft/note payload or an
+absolute database path. The manifest inventory truthfully reports
+`generated_local_only` and zero external calls.
+
+This is a local conformance and judge path, not a production-provider
+integration or an external exactly-once guarantee. It requires no LLM, MySQL,
+account, API key, Docker runtime, or outbound network. v0.15 has not been
+deployed to the production Globus server.
 
 ## Consequence Firewall and Approval Center
 
@@ -188,6 +250,9 @@ concurrency, privacy, HTTP, CLI, and real-runner coverage.
 python -m compileall -q globus_truth
 python -m unittest discover -s globus_truth/tests -v
 ```
+
+The v0.15 suite contains **164 Truth/Mission Control tests**. The repository
+gate below passes all **11 check groups**.
 
 The suite uses only temporary files and loopback HTTP. It does not contact an
 external network or service.
@@ -404,6 +469,11 @@ responses include restrictive browser security headers.
 | `POST` | `/api/v1/judge/approval-center/stage` | Stage the credential-free pending approval proof; body must be `{}`. |
 | `POST` | `/api/v1/judge/approval-center/{proposal_id}/approve` | Approve and resolve the bounded generated local proof; body must be `{}`. |
 | `POST` | `/api/v1/judge/approval-center/{proposal_id}/reject` | Reject the bounded generated local proof; body must be `{}`. |
+| `GET` | `/api/v1/verified-actions/manifests` | List the two generated-local reference manifests and zero-external-call disclosure. |
+| `GET` | `/api/v1/verified-actions/{proposal_id}/timeline` | Read the privacy-safe six-stage timeline derived from immutable source records. |
+| `POST` | `/api/v1/judge/verified-actions/stage` | Stage one generated action; body must contain only `adapter_id`. |
+| `POST` | `/api/v1/judge/verified-actions/{proposal_id}/approve` | Approve and resolve one staged generated action; body must be `{}`. |
+| `POST` | `/api/v1/judge/verified-actions/{proposal_id}/reject` | Reject one staged generated action; body must be `{}`. |
 
 Example:
 
@@ -529,14 +599,16 @@ database server, cloud account, API key, or outbound network access is required.
 ## Built during OpenAI Build Week with Codex and GPT-5.6
 
 **Globus Truth Layer, Mission Control, Action Gate, Consequence Firewall,
-Approval Center, and the public OSS AgentRunner integration are the new work
-built during OpenAI Build Week with Codex and GPT-5.6.** The work includes the
+Approval Center, Verified Action SDK, its two local reference adapters, and
+the public OSS AgentRunner integration are the new work built during OpenAI
+Build Week with Codex and GPT-5.6.** The work includes the
 v1 receipt contract, strict evaluator, SQLite receipt/decision/approval audit
 repositories, local dashboard/API, source-backed capability registry, exact
 runtime grants for four built-in background agents, safe fixtures, real
 artifact verification, the credential-free Evidence Lab, business-outcome
-challenge, and changed/exact/replay approval proof, visible verdict badges,
-adversarial tests, and this documentation.
+challenge, changed/exact/replay approval proof, manifest-bound actions,
+independent destination verification, six-stage derived timelines, visible
+verdict badges, adversarial tests, and this documentation.
 
 The broader Globus platform and its existing agent fleet predate this Build Week
 work. They were not built with Codex or GPT-5.6, and this repository does not claim

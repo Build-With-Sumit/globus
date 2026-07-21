@@ -1,11 +1,13 @@
-"""Globus — main HTTP server entrypoint (v0.14.0).
+"""Globus — main HTTP server entrypoint (v0.15.0).
 
 Run:
     python3 server/globus_server.py
 
-v0.14.0 ships cited text/voice chat, connected vault sources, the OSS agent
+v0.15.0 ships cited text/voice chat, connected vault sources, the OSS agent
 runner, evidence-backed Truth Layer verdicts, and the local Consequence
-Firewall. See ROADMAP.md for the historical release slices and queued work.
+Firewall plus Verified Action SDK. The v0.15 action references remain
+generated-local only and are not a production-provider deployment. See
+ROADMAP.md for the historical release slices and queued work.
 
 Module wiring order matters — see ARCHITECTURE.md § 2. This file
 boots config + .env → wires every server/*.py module via their
@@ -409,7 +411,7 @@ def _deep_health():
                                        "claude-oauth")}
 
     return (200 if overall_ok else 503), {
-        "ok": overall_ok, "app": "globus", "v": "0.14.0",
+        "ok": overall_ok, "app": "globus", "v": "0.15.0",
         "checks": checks,
     }
 
@@ -419,7 +421,7 @@ def _deep_health():
 # ─────────────────────────────────────────────────────────────────────
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "globus/0.14.0"
+    server_version = "globus/0.15.0"
 
     def log_message(self, fmt, *args):
         return
@@ -995,7 +997,7 @@ class Handler(BaseHTTPRequestHandler):
             deep = bool((qs.get("deep") or [""])[0])
             if not deep:
                 return self._send_json(
-                    200, {"ok": True, "app": "globus", "v": "0.14.0"})
+                    200, {"ok": True, "app": "globus", "v": "0.15.0"})
             return self._send_json(*_deep_health())
 
         # Static assets
@@ -1684,7 +1686,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    print(f"globus/0.14.0 booting on {HOST}:{PORT}", flush=True)
+    print(f"globus/0.15.0 booting on {HOST}:{PORT}", flush=True)
     print(f"  site:     {SITE}", flush=True)
     print(f"  db:       {DB_CFG['user']}@{DB_CFG['host']}:{DB_CFG['port']}/"
           f"{DB_CFG['database']}", flush=True)

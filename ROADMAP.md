@@ -581,7 +581,7 @@ fail-closed control path over a large but unverifiable integration count.
 - 📄 See [`globus_truth/README.md`](globus_truth/README.md) and
   [`docs/TRUTH_LAYER_BUILD_STORY.md`](docs/TRUTH_LAYER_BUILD_STORY.md).
 
-## v0.14 (current) — Consequence Firewall + Approval Center
+## v0.14 — Consequence Firewall + Approval Center
 
 v0.14 puts enforceable limits between an agent's plan and a consequential
 effect. Its scope is intentionally concrete: four shipped background agents
@@ -623,6 +623,46 @@ and a local, inspectable approval coordinator.
   exact proposals. The generic HTTP API deliberately does not accept or
   dispatch arbitrary callbacks; only the bounded built-in judge workflow
   performs its generated local callback.
+- 📄 See [`globus_truth/README.md`](globus_truth/README.md) and
+  [`ARCHITECTURE.md`](ARCHITECTURE.md).
+
+## v0.15 (current) — Verified Action SDK + execution timeline
+
+v0.15 makes destination verification a required stage for SDK-managed
+consequential actions. It extends the local Approval Center path without
+claiming that external provider integrations are connected or exactly-once.
+
+- ✅ **Strict action manifests.** Adapters declare one exact, versioned
+  contract covering action kind, risk, Truth policy, explicit approval,
+  deny-by-default permissions, deterministic idempotency, and independent
+  read-back. Unknown fields and values fail closed.
+- ✅ **Manifest-bound request digest.** The canonical SHA-256 envelope includes
+  adapter ID, adapter version, action kind, and exact strict-JSON payload, so a
+  payload cannot be silently moved between adapter contracts.
+- ✅ **Deterministic idempotency.** A stable key binds proposal, adapter
+  identity/version, action kind, and request digest. The Approval Center's
+  unique claim remains the local authorization boundary.
+- ✅ **Independent destination verification.** After execution, the adapter
+  opens a new query-only destination connection and checks the observed
+  effect. An immutable verification record binds proposal, claim, request,
+  idempotency-key digest, observation digest, result, reason, and time.
+- ✅ **Verification-gated completion.** SDK action completions require a bound
+  destination-verification record whose verified/failed result agrees with the
+  completion outcome. A claimed effect without proof stays indeterminate and
+  is not automatically retried.
+- ✅ **Six-stage derived timeline.** Mission Control derives proposal → human
+  decision → Truth gate → execution claim → destination verification →
+  completion from one SQLite snapshot. It does not duplicate those records
+  into a mutable event log, and legacy completions are not relabeled verified.
+- ✅ **Two safe reference adapters.** Email Draft and CRM Note model
+  provider-shaped operations using generated rows in generated local SQLite
+  sandboxes. Both perform independent read-back and expose privacy-safe hashes
+  and counts.
+- ✅ **Honest judge boundary.** The references connect no provider account,
+  use no credential or outbound network, send no email, and update no external
+  CRM. They are a local conformance path, not production deployment or an
+  external exactly-once claim. v0.15 has not been deployed to the production
+  Globus server.
 - 📄 See [`globus_truth/README.md`](globus_truth/README.md) and
   [`ARCHITECTURE.md`](ARCHITECTURE.md).
 

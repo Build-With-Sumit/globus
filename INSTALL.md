@@ -1,7 +1,7 @@
 # Installing Globus
 
 > **Status: alpha.** The reference implementation runs in production at
-> buildwithsumit.com. This guide gets v0.14 running on your box — sign-in
+> buildwithsumit.com. This guide gets v0.15 running on your box — sign-in
 > via OTP, vault from Obsidian zip + Google Drive + Gmail + the
 > WhatsApp/Teams Chrome extension, text and voice chat (ElevenLabs;
 > see [`docs/voice-setup.md`](docs/voice-setup.md)), and a working
@@ -44,24 +44,43 @@ docker compose up -d
 
 ### Credential-free Mission Control
 
-The v0.14 verification and control surface can run independently of MySQL and
+The v0.15 verification and control surface can run independently of MySQL and
 provider configuration:
 
 ```bash
 python -m globus_truth
 ```
 
-Open <http://127.0.0.1:8765>, then click **Stage generated approval request**.
-The generated challenge pauses with zero actions, requires an exact human
-decision, blocks a changed payload, executes the approved payload once behind
-current evidence, and blocks replay. The v0.13 **Run verified business
-workflow** challenge remains on the same page. Neither judge path needs an LLM,
-API key, provider account, Docker runtime, or external network call.
+Open <http://127.0.0.1:8765>, then click **Create local email draft** or
+**Append local CRM note**. Each generated-only reference action binds its
+adapter manifest and exact request into one digest, pauses for an exact human
+decision, executes behind fresh Truth with a deterministic idempotency key,
+reopens the SQLite destination through an independent read-only connection,
+and records immutable destination verification. The dialog shows the six
+derived stages from proposal through completion.
+
+The v0.14 **Stage generated approval request** and v0.13 **Run verified
+business workflow** challenges remain on the same page. None of these judge
+paths needs an LLM, API key, provider account, Docker runtime, or external
+network call. The email-draft and CRM-note references do not send email,
+connect an account, or update an external CRM. They are local conformance
+examples; v0.15 has not been deployed to the production Globus server.
 
 The capability inventory on the same page is source-backed and separates
 `native`, `implemented/setup_required`, `bridge/catalog`, and `planned`.
 Implemented/setup-required does not mean the corresponding account is
 connected.
+
+To inspect the reference action contracts without executing one:
+
+```bash
+curl http://127.0.0.1:8765/api/v1/verified-actions/manifests
+```
+
+The response reports `generated_local_only`, zero external calls, and the two
+strict manifests. Stage/approve/reject operations are deliberately bounded to
+the built-in generated judge workflow; the generic API does not accept
+arbitrary callback code or provider credentials.
 
 To run the same workflow without a browser:
 
@@ -292,7 +311,7 @@ one specific team. Define your own.
 
 ```bash
 python3 server/globus_server.py
-# globus/0.14.0 booting on 127.0.0.1:8090
+# globus/0.15.0 booting on 127.0.0.1:8090
 #   site:     https://globus.example.com
 #   db:       globus@127.0.0.1:3306/globus
 #   llm:      claude-oauth

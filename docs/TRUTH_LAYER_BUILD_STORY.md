@@ -9,6 +9,10 @@ OpenAI Build Week using Codex with GPT-5.6. This document explains exactly what
 was built, how it works, what it does not claim to do, and how to present it
 accurately on camera.
 
+> **Video note:** The currently published demo video may predate v0.15. Do not
+> imply that its footage shows the Verified Action SDK unless you record the
+> new Email Draft / CRM Note flow and six-stage timeline.
+
 > **The central idea:** An AI agent saying “done” is making a claim. Globus
 > Truth Layer requires measurements, checks, timestamps, and evidence before
 > that claim can receive a healthy status.
@@ -23,7 +27,9 @@ extended it in v0.13 with **Mission Control**, a source-backed capability
 registry, and a fail-closed **Action Gate**. In v0.14 we added the
 **Consequence Firewall**: exact runtime tool grants for four built-in
 background agents plus a payload-free **Approval Center** whose human consent
-remains subordinate to fresh Truth.
+remains subordinate to fresh Truth. In v0.15 we added the **Verified Action
+SDK**, two generated-only local reference adapters, independent destination
+read-back, immutable verification, and a six-stage execution timeline.
 
 ## Important naming
 
@@ -370,9 +376,54 @@ callbacks. `requested_by` and `decided_by` are local audit labels rather than
 cryptographic identities; operating-system/process access to localhost is the
 trust boundary.
 
-### 14. Automated tests
+### 14. The v0.15 Verified Action SDK
 
-The v0.14 hermetic Truth/Mission Control suite covers:
+The Verified Action SDK turns the approval proof into a reusable lifecycle for
+consequential adapters:
+
+1. An adapter publishes an exact versioned manifest: adapter ID, action kind,
+   risk, Truth policy, local permissions, explicit approval mode,
+   deterministic idempotency strategy, and independent read-back mode.
+2. Globus validates a strict canonical-JSON request and hashes an envelope
+   containing the adapter ID, adapter version, action kind, and exact payload.
+   This makes the request binding specific to the adapter contract, not just
+   the payload bytes.
+3. A deterministic idempotency key binds the proposal and manifest to that
+   request digest.
+4. Approval and a fresh Truth verdict are checked before the unique execution
+   claim.
+5. After the effect, the adapter opens a new query-only destination connection
+   and verifies what is actually present.
+6. Globus stores an immutable verification bound to proposal, claim, adapter,
+   request digest, idempotency-key digest, observation digest, result, reason,
+   and timestamp.
+7. A `verified.*` action cannot be recorded as completed unless destination
+   verification exists and agrees with the completion result.
+
+Mission Control derives six fixed stages from one SQLite snapshot: proposal,
+human decision, Truth gate, execution claim, destination verification, and
+completion. It does not maintain a second mutable timeline table. A claim
+without destination proof remains indeterminate and is not automatically
+retried; older Approval Center completions are not retroactively described as
+destination-verified.
+
+The two reference adapters are intentionally safe and narrow:
+
+- **Email Draft** creates one generated draft row in a generated local SQLite
+  sandbox. It never sends an email and connects no mailbox.
+- **CRM Note** appends one generated note row in a generated local SQLite
+  sandbox. It connects no CRM and updates no external account.
+
+Both reopen their destination independently and expose only privacy-safe
+identifiers, counts, reason codes, and hashes in the proof. They require no
+LLM, provider account, API key, Docker runtime, or outbound network. They are a
+local conformance demonstration, not production provider integrations or an
+external exactly-once claim. v0.15 has not been deployed to the production
+Globus server.
+
+### 15. Automated tests
+
+The hermetic Truth/Mission Control suite covers:
 
 - Receipt evaluation and verdict precedence.
 - HTTP, dashboard, and strict JSON behavior.
@@ -384,6 +435,10 @@ The v0.14 hermetic Truth/Mission Control suite covers:
 - Exact background-agent grants, schema filtering, and dispatch rechecks.
 - Approval proposal/decision immutability, privacy, concurrency, fresh-Truth
   enforcement, and local at-most-once claims.
+- Verified Action manifest validation, request/adapter binding, deterministic
+  idempotency, independent read-back, destination tamper detection, immutable
+  verification, timeline integrity, rejection, concurrency, and replay
+  prevention.
 - The changed/exact/replay approval proof and loopback-only HTTP boundary.
 - Capability-registry schema, count, source, and secret-safety checks.
 - Verified-outcome success, contradiction, non-invocation, confinement, and
@@ -400,6 +455,9 @@ must prevent a second bounded action.
 The repository-level command also runs the wider Globus behavioural checks,
 visible-verdict rendering tests, public-asset smoke tests, and Python
 compilation in isolated processes.
+
+For v0.15, all **164 Truth/Mission Control tests** and all **11
+repository-wide check groups** pass.
 
 ## What Codex with GPT-5.6 contributed
 
@@ -422,6 +480,8 @@ Codex with GPT-5.6 helped translate those lessons into:
 - The immutable, fail-closed Action Gate.
 - The exact runtime grants for four built-in background agents.
 - The payload-free Approval Center and changed/exact/replay proof.
+- The Verified Action SDK, two generated-only local adapters, immutable
+  destination verification, and six-stage derived timeline.
 - The credential-free verified business-outcome challenge.
 - The credential-free real-byte Evidence Lab.
 - The real OSS AgentRunner adapter and visible verdict integration.
@@ -454,11 +514,11 @@ They should not be represented as having been built with Codex or GPT-5.6.
 > The outcome is one of five explainable verdicts: healthy, verified no-work,
 > contradictory, failed, or stale.
 >
-> In v0.14, the Consequence Firewall gives each built-in background agent an
-> exact tool grant. Its fastest proof pauses one generated high-risk action for
-> human review. After approval, a changed payload stays blocked, the exact
-> payload executes once behind a fresh Truth check, and a replay stays blocked.
-> No LLM, API key, or external call.
+> v0.15 adds a Verified Action SDK. Its safe Email Draft and CRM Note examples
+> bind each generated request to an adapter manifest, pause for human review,
+> execute behind fresh Truth, reopen the local destination independently, and
+> record verification before completion. The six-stage timeline is derived
+> from immutable audit records. No provider account, API key, or external call.
 >
 > Once the public Globus runner has a durable run ID, it writes the brief, reads
 > it back, verifies its SHA-256, and stores the receipt before the ledger can
@@ -470,10 +530,10 @@ They should not be represented as having been built with Codex or GPT-5.6.
 ### Reel screen cues
 
 1. Open on camera: “An agent saying done is making a claim.”
-2. Click **Stage generated approval request**.
-3. Show the exact scope paused with zero actions before approval.
-4. Approve it, then show changed blocked, exact executed once, and replay
-   blocked.
+2. Click **Create local email draft** or **Append local CRM note**.
+3. Show the manifest-bound exact scope paused with zero destination rows.
+4. Approve it, then show independent destination verification and all six
+   lifecycle stages.
 5. Briefly show one real public Globus agent and its Truth badge.
 6. Show the 71-capability registry disclosure: implemented is not connected.
 7. Show the complete hermetic test command passing in the terminal.
@@ -489,8 +549,9 @@ They should not be represented as having been built with Codex or GPT-5.6.
 > cited chat, voice, connected business data, and specialized agents.
 >
 > The work I built specifically for OpenAI Build Week is the Globus Truth
-> Layer, v0.13 Mission Control and Action Gate, and the v0.14 Consequence
-> Firewall and Approval Center, using Codex with GPT-5.6.
+> Layer, v0.13 Mission Control and Action Gate, the v0.14 Consequence
+> Firewall and Approval Center, and the v0.15 Verified Action SDK, using Codex
+> with GPT-5.6.
 >
 > The problem is simple: an agent saying “done” is only making a claim. A
 > polished answer does not prove that a database was updated, a file was
@@ -627,6 +688,35 @@ reason-code binding.
 exact scope, approve it, and hold on the three changed/exact/replay result
 cards.
 
+### The Verified Action SDK and proof after the effect
+
+> v0.15 carries the control path through destination verification. Each action
+> adapter declares a strict versioned manifest: its action kind, risk, policy,
+> permissions, approval requirement, idempotency strategy, and read-back mode.
+>
+> Globus hashes the exact request together with the adapter ID, adapter
+> version, and action kind. It derives a deterministic idempotency key, then
+> keeps approval and current Truth in front of the unique execution claim.
+>
+> After the local effect, the adapter opens a separate read-only connection
+> and reconstructs what is actually in the destination. Completion requires an
+> immutable verification record that agrees with the outcome.
+>
+> The visible timeline has six stages: proposed, human decision, Truth gate,
+> execution claimed, destination verification, and completed. Those events are
+> derived from one database snapshot, not copied into a mutable presentation
+> log.
+>
+> The Email Draft and CRM Note adapters use only generated local SQLite
+> sandboxes. They do not send email, connect an account, call a provider, or
+> update an external CRM. This proves the SDK contract locally; it does not
+> claim an external exactly-once effect.
+
+**Screen cue:** Stage either reference action, show the manifest and zero
+effects before approval, approve it, then hold on the destination-verification
+hash and the completed six-stage timeline. Show the second adapter briefly to
+make clear that both run through the same contract.
+
 ### The 60-second Evidence Lab
 
 > A judge should not need our LLM key or MySQL configuration to see the core
@@ -661,7 +751,9 @@ values, and then open the healthy and contradictory receipts.
 > capability inventory, the verified-outcome challenge, and immutable gate
 > decisions through the same loopback-only service. The Approval Center API
 > can create, inspect, approve, and reject fixed-envelope proposals; it does
-> not execute an arbitrary callback.
+> not execute an arbitrary callback. The Verified Action endpoints can stage
+> and resolve only the two built-in generated local references, and expose
+> their privacy-safe derived timeline.
 
 **Screen cue:** Show the dashboard detail panel, then briefly show an API JSON
 response.
@@ -708,7 +800,8 @@ show the artifact hash check.
 > The final suite covers the evaluator, storage, automatic aging,
 > command-line interface, HTTP surface, real runner adapter, member isolation,
 > visible verdict rendering, exact runtime permissions, immutable approvals,
-> fresh-Truth execution, and replay blocking.
+> fresh-Truth execution, replay blocking, strict action manifests,
+> deterministic idempotency, destination verification, and timeline integrity.
 
 **Screen cue:** Show the relevant Codex session, then run the test command and
 end on the complete passing summary.
@@ -719,7 +812,8 @@ end on the complete passing summary.
 > Claude-native at runtime.
 >
 > The new Build Week work is the Truth Layer, Mission Control, Action Gate,
-> Consequence Firewall, Approval Center, and the public OSS runner integration.
+> Consequence Firewall, Approval Center, Verified Action SDK, two local
+> reference adapters, and the public OSS runner integration.
 > In the included runner, an `ok` ledger state requires a trusted persisted
 > receipt; failures before receipt creation remain explicitly non-green. The
 > exact runtime grants currently govern four built-in background agents, not
@@ -732,7 +826,8 @@ end on the complete passing summary.
 > every provider adapter is connected or every external service has the same
 > proof today. The local unique execution claim is at-most-once coordination,
 > not external exactly-once delivery; real providers still need their own
-> idempotency and reconciliation.
+> idempotency and reconciliation. The v0.15 reference adapters make zero
+> provider calls and have not been deployed to the production Globus server.
 
 **Screen cue:** Return to camera for this section. The scope disclosure is more
 credible when spoken directly.
@@ -748,7 +843,9 @@ credible when spoken directly.
 > between an agent's claim and the operator who has to trust it, plus a gate
 > that can stop the next action when the evidence does not match. The v0.14
 > Consequence Firewall also limits the tools a background agent can attempt and
-> keeps human approval subordinate to fresh Truth.
+> keeps human approval subordinate to fresh Truth. v0.15 then requires the
+> local destination effect to be read back and verified before an SDK action
+> can finish as successful.
 
 ## Recommended visual shot list
 
@@ -757,16 +854,18 @@ credible when spoken directly.
 3. Mission Control capability counts and setup-state disclosure.
 4. Approval Center paused with the exact scope and zero actions.
 5. Consequence Firewall changed/exact/replay proof.
-6. Verified workflow 3 → 3 allowed and 3 → 2 blocked.
-7. One immutable Action Gate decision.
-8. Evidence Lab one-byte result and before/after hashes.
-9. Healthy and verified-no-work receipts.
-10. Contradictory, failure, and stale reason codes.
-11. SQLite receipt records and latest verdicts in the dashboard.
-12. JSON API response.
-13. Codex/GPT-5.6 build session.
-14. Terminal running the complete hermetic test command.
-15. Public repository and one-command quick start.
+6. Verified Action Email Draft or CRM Note paused before approval.
+7. Independent destination-verification hash and six-stage timeline.
+8. Verified workflow 3 → 3 allowed and 3 → 2 blocked.
+9. One immutable Action Gate decision.
+10. Evidence Lab one-byte result and before/after hashes.
+11. Healthy and verified-no-work receipts.
+12. Contradictory, failure, and stale reason codes.
+13. SQLite receipt records and latest verdicts in the dashboard.
+14. JSON API response.
+15. Codex/GPT-5.6 build session.
+16. Terminal running the complete hermetic test command.
+17. Public repository and one-command quick start.
 
 ## Accuracy guide
 
@@ -790,6 +889,16 @@ credible when spoken directly.
 - “The generated approval proof blocks a changed payload, executes the exact
   payload once locally, and blocks replay.”
 - “The Approval Center stores hashes and audit metadata, not action payloads.”
+- “The Verified Action SDK binds the adapter identity and version, action kind,
+  and exact request into one digest.”
+- “Its deterministic idempotency key is stable for the same proposal and
+  manifest-bound request.”
+- “The two references independently read back generated local SQLite rows
+  before verified completion.”
+- “The six-stage timeline is derived from immutable source records in one
+  SQLite snapshot.”
+- “The reference adapters make zero provider calls; they do not send email or
+  update a real CRM.”
 - “The registry describes 71 source-backed capabilities; setup-required does
   not mean connected.”
 - “The public OSS AgentRunner cannot mark a run `ok` without a trusted,
@@ -808,6 +917,10 @@ credible when spoken directly.
 - “It is a trained truth model.”
 - “Globus has OpenClaw parity.”
 - “All 33 provider adapters are connected and ready on this install.”
+- “The v0.15 Email Draft and CRM Note references are live provider
+  integrations.”
+- “The local SDK proof guarantees external exactly-once delivery.”
+- “The currently published video necessarily includes v0.15.”
 - “All 71 registry capabilities are governed by runtime grants.”
 - “Every consequential Globus action is already controlled by Action Gate.”
 - “Human approval guarantees an external action happens exactly once.”

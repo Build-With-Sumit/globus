@@ -300,6 +300,57 @@ class TruthService:
             artifact_root=artifact_root,
         )
 
+    def verified_action_manifests(self) -> dict[str, Any]:
+        """Return the two generated-local Verified Action SDK contracts."""
+        from .verified_action_lab import verified_action_manifests
+
+        return verified_action_manifests()
+
+    def stage_verified_action_lab(
+        self,
+        *,
+        adapter_id: str,
+        artifact_root: Any | None = None,
+    ) -> dict[str, Any]:
+        """Stage one provider-shaped local action for exact human review."""
+        from .verified_action_lab import stage_verified_action_lab
+
+        return stage_verified_action_lab(
+            self,
+            adapter_id=adapter_id,
+            artifact_root=artifact_root,
+        )
+
+    def resolve_verified_action_lab(
+        self,
+        proposal_id: str,
+        *,
+        disposition: str,
+        artifact_root: Any | None = None,
+    ) -> dict[str, Any]:
+        """Resolve a generated Verified Action SDK request without a payload."""
+        from .verified_action_lab import resolve_verified_action_lab
+
+        return resolve_verified_action_lab(
+            self,
+            proposal_id,
+            disposition=disposition,
+            artifact_root=artifact_root,
+        )
+
+    def get_verified_action_timeline(
+        self,
+        proposal_id: str,
+    ) -> dict[str, Any] | None:
+        """Return a fixed, privacy-safe lifecycle derived from one snapshot."""
+        from .verified_action_timeline import build_verified_action_timeline
+
+        return build_verified_action_timeline(
+            self.repository,
+            proposal_id,
+            now=self._now(),
+        )
+
     def run_outcome_gate_challenge(
         self,
         *,

@@ -117,7 +117,7 @@ def _provider_adapters_from_source() -> list[tuple[str, str, str]]:
 class PlatformRegistryTests(unittest.TestCase):
     def test_summary_is_honest_and_explicit_about_setup(self):
         summary = get_platform_summary()
-        self.assertEqual(summary["release"], "0.14.0")
+        self.assertEqual(summary["release"], "0.15.0")
         self.assertEqual(summary["headline"]["built_in_agents"], 4)
         self.assertEqual(summary["headline"]["llm_tools"], 20)
         self.assertEqual(

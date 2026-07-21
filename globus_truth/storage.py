@@ -89,6 +89,22 @@ _APPROVAL_COMPLETION_FIELDS = {
     "reason_code",
     "completed_at",
 }
+_VERIFIED_ACTION_VERIFICATION_FIELDS = {
+    "verification_id",
+    "proposal_id",
+    "claim_id",
+    "adapter_id",
+    "adapter_version",
+    "action_kind",
+    "request_sha256",
+    "idempotency_key_sha256",
+    "observation_sha256",
+    "observed_count",
+    "verified",
+    "reason_code",
+    "verified_at",
+    "verification_sha256",
+}
 _SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _Reevaluator = Callable[
@@ -115,6 +131,10 @@ class HumanApprovalConflict(ValueError):
 
 class ApprovalExecutionConflict(ValueError):
     """Raised when an execution audit record conflicts with persisted state."""
+
+
+class VerifiedActionVerificationConflict(ValueError):
+    """Raised when a destination-verification audit conflicts with state."""
 
 
 def _canonical_json(value: Any) -> str:
@@ -461,6 +481,122 @@ class TruthRepository:
                     )
                     BEGIN
                         SELECT RAISE(ABORT, 'inconsistent approval completion');
+                    END;
+
+                CREATE TABLE IF NOT EXISTS verified_action_verifications (
+                    verification_id TEXT PRIMARY KEY,
+                    proposal_id TEXT NOT NULL UNIQUE
+                        REFERENCES action_proposals(proposal_id),
+                    claim_id TEXT NOT NULL UNIQUE
+                        REFERENCES approval_execution_claims(claim_id),
+                    adapter_id TEXT NOT NULL,
+                    adapter_version TEXT NOT NULL,
+                    action_kind TEXT NOT NULL,
+                    request_sha256 TEXT NOT NULL CHECK (
+                        length(request_sha256) = 64
+                        AND request_sha256 NOT GLOB '*[^0-9a-f]*'
+                    ),
+                    idempotency_key_sha256 TEXT NOT NULL CHECK (
+                        length(idempotency_key_sha256) = 64
+                        AND idempotency_key_sha256 NOT GLOB '*[^0-9a-f]*'
+                    ),
+                    observation_sha256 TEXT NOT NULL CHECK (
+                        length(observation_sha256) = 64
+                        AND observation_sha256 NOT GLOB '*[^0-9a-f]*'
+                    ),
+                    observed_count INTEGER NOT NULL CHECK (
+                        observed_count >= 0
+                        AND observed_count <= 1000000
+                    ),
+                    verified INTEGER NOT NULL CHECK (
+                        verified IN (0, 1)
+                        AND (verified = 0 OR observed_count >= 1)
+                    ),
+                    reason_code TEXT NOT NULL,
+                    verified_at TEXT NOT NULL,
+                    verification_sha256 TEXT NOT NULL CHECK (
+                        length(verification_sha256) = 64
+                        AND verification_sha256 NOT GLOB '*[^0-9a-f]*'
+                    )
+                );
+                CREATE INDEX IF NOT EXISTS idx_verified_actions_recent
+                    ON verified_action_verifications(
+                        verified_at DESC,
+                        verification_id DESC
+                    );
+                CREATE TRIGGER IF NOT EXISTS verified_actions_no_update
+                    BEFORE UPDATE ON verified_action_verifications
+                    BEGIN
+                        SELECT RAISE(ABORT, 'verified action records are immutable');
+                    END;
+                CREATE TRIGGER IF NOT EXISTS verified_actions_no_delete
+                    BEFORE DELETE ON verified_action_verifications
+                    BEGIN
+                        SELECT RAISE(ABORT, 'verified action records are immutable');
+                    END;
+                CREATE TRIGGER IF NOT EXISTS verified_actions_consistent_insert
+                    BEFORE INSERT ON verified_action_verifications
+                    WHEN NOT EXISTS (
+                        SELECT 1
+                          FROM approval_execution_claims AS c
+                          JOIN action_proposals AS p
+                            ON p.proposal_id = c.proposal_id
+                         WHERE c.claim_id = NEW.claim_id
+                           AND c.proposal_id = NEW.proposal_id
+                           AND p.action_kind = NEW.action_kind
+                           AND p.payload_sha256 = NEW.request_sha256
+                           AND NEW.verified_at >= c.claimed_at
+                           AND (
+                                (
+                                    NEW.verified = 1
+                                    AND NEW.observed_count >= 1
+                                    AND NEW.reason_code =
+                                        'destination_readback_verified'
+                                )
+                                OR (
+                                    NEW.verified = 0
+                                    AND NEW.reason_code !=
+                                        'destination_readback_verified'
+                                )
+                           )
+                    )
+                    BEGIN
+                        SELECT RAISE(
+                            ABORT,
+                            'inconsistent verified action record'
+                        );
+                    END;
+                CREATE TRIGGER IF NOT EXISTS verified_action_completion_required
+                    BEFORE INSERT ON approval_execution_completions
+                    WHEN EXISTS (
+                        SELECT 1
+                          FROM approval_execution_claims AS c
+                          JOIN action_proposals AS p
+                            ON p.proposal_id = c.proposal_id
+                         WHERE c.claim_id = NEW.claim_id
+                           AND p.action_kind GLOB 'verified.*'
+                    )
+                    AND NOT EXISTS (
+                        SELECT 1
+                          FROM verified_action_verifications AS v
+                         WHERE v.claim_id = NEW.claim_id
+                           AND v.verified_at <= NEW.completed_at
+                           AND (
+                                (
+                                    NEW.outcome = 'succeeded'
+                                    AND v.verified = 1
+                                )
+                                OR (
+                                    NEW.outcome = 'failed'
+                                    AND v.verified = 0
+                                )
+                           )
+                    )
+                    BEGIN
+                        SELECT RAISE(
+                            ABORT,
+                            'verified action completion lacks destination proof'
+                        );
                     END;
                 """
             )
@@ -1399,6 +1535,383 @@ class TruthRepository:
                 (claim_id,),
             ).fetchone()
         return self._decode_approval_completion(row) if row is not None else None
+
+    @staticmethod
+    def _decode_verified_action_verification(
+        row: sqlite3.Row,
+    ) -> dict[str, Any]:
+        return {
+            "verification_id": row["verification_id"],
+            "proposal_id": row["proposal_id"],
+            "claim_id": row["claim_id"],
+            "adapter_id": row["adapter_id"],
+            "adapter_version": row["adapter_version"],
+            "action_kind": row["action_kind"],
+            "request_sha256": row["request_sha256"],
+            "idempotency_key_sha256": row["idempotency_key_sha256"],
+            "observation_sha256": row["observation_sha256"],
+            "observed_count": int(row["observed_count"]),
+            "verified": bool(row["verified"]),
+            "reason_code": row["reason_code"],
+            "verified_at": row["verified_at"],
+            "verification_sha256": row["verification_sha256"],
+        }
+
+    @classmethod
+    def _validate_verified_action_verification(
+        cls,
+        verification: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        if (
+            not isinstance(verification, Mapping)
+            or set(verification) != _VERIFIED_ACTION_VERIFICATION_FIELDS
+        ):
+            raise ValueError(
+                "verified action record contains unsupported fields"
+            )
+        item: dict[str, Any] = {}
+        for field in (
+            "verification_id",
+            "proposal_id",
+            "claim_id",
+            "adapter_id",
+            "adapter_version",
+            "action_kind",
+            "reason_code",
+        ):
+            item[field] = cls._approval_safe_id(
+                field,
+                verification.get(field),
+            )
+        for field in (
+            "request_sha256",
+            "idempotency_key_sha256",
+            "observation_sha256",
+        ):
+            item[field] = cls._approval_sha256(
+                field,
+                verification.get(field),
+            )
+        observed_count = verification.get("observed_count")
+        if (
+            type(observed_count) is not int
+            or not 0 <= observed_count <= 1_000_000
+        ):
+            raise ValueError("observed_count must be an integer from 0 to 1000000")
+        item["observed_count"] = observed_count
+        verified = verification.get("verified")
+        if not isinstance(verified, bool):
+            raise ValueError("verified must be a boolean")
+        item["verified"] = verified
+        if verified and observed_count < 1:
+            raise ValueError(
+                "a verified action must include at least one observed record"
+            )
+        if (
+            verified
+            and item["reason_code"] != "destination_readback_verified"
+        ) or (
+            not verified
+            and item["reason_code"] == "destination_readback_verified"
+        ):
+            raise ValueError(
+                "verified action reason code is inconsistent with its result"
+            )
+        item["verified_at"] = cls._approval_timestamp(
+            "verified_at",
+            verification.get("verified_at"),
+        )
+        item["verification_sha256"] = cls._approval_sha256(
+            "verification_sha256",
+            verification.get("verification_sha256"),
+        )
+        expected_hash = hashlib.sha256(
+            _canonical_json(
+                {
+                    field: item[field]
+                    for field in sorted(
+                        _VERIFIED_ACTION_VERIFICATION_FIELDS
+                        - {"verification_sha256"}
+                    )
+                }
+            ).encode("utf-8")
+        ).hexdigest()
+        if item["verification_sha256"] != expected_hash:
+            raise ValueError(
+                "verified action record hash does not match its fields"
+            )
+        return item
+
+    def save_verified_action_verification(
+        self,
+        verification: Mapping[str, Any],
+    ) -> tuple[dict[str, Any], bool]:
+        """Persist one immutable, payload-free destination read-back result."""
+
+        item = self._validate_verified_action_verification(verification)
+        semantic_fields = tuple(
+            sorted(
+                _VERIFIED_ACTION_VERIFICATION_FIELDS
+                - {"verification_id", "verified_at", "verification_sha256"}
+            )
+        )
+        with self._lock, closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                existing = connection.execute(
+                    """
+                    SELECT verification_id, proposal_id, claim_id, adapter_id,
+                           adapter_version, action_kind, request_sha256,
+                           idempotency_key_sha256, observation_sha256,
+                           observed_count, verified, reason_code, verified_at,
+                           verification_sha256
+                      FROM verified_action_verifications
+                     WHERE verification_id = ?
+                        OR proposal_id = ?
+                        OR claim_id = ?
+                    """,
+                    (
+                        item["verification_id"],
+                        item["proposal_id"],
+                        item["claim_id"],
+                    ),
+                ).fetchone()
+                if existing is not None:
+                    decoded = self._decode_verified_action_verification(
+                        existing
+                    )
+                    if all(
+                        decoded[field] == item[field]
+                        for field in semantic_fields
+                    ):
+                        connection.commit()
+                        return decoded, False
+                    raise VerifiedActionVerificationConflict(
+                        "execution claim already has a different verification"
+                    )
+
+                binding = connection.execute(
+                    """
+                    SELECT c.proposal_id, c.claimed_at, p.action_kind,
+                           p.payload_sha256
+                      FROM approval_execution_claims AS c
+                      JOIN action_proposals AS p
+                        ON p.proposal_id = c.proposal_id
+                     WHERE c.claim_id = ?
+                    """,
+                    (item["claim_id"],),
+                ).fetchone()
+                if (
+                    binding is None
+                    or binding["proposal_id"] != item["proposal_id"]
+                    or binding["action_kind"] != item["action_kind"]
+                    or binding["payload_sha256"] != item["request_sha256"]
+                    or item["verified_at"] < binding["claimed_at"]
+                ):
+                    raise VerifiedActionVerificationConflict(
+                        "verification is not bound to the claimed exact action"
+                    )
+
+                connection.execute(
+                    """
+                    INSERT INTO verified_action_verifications
+                        (
+                            verification_id, proposal_id, claim_id,
+                            adapter_id, adapter_version, action_kind,
+                            request_sha256, idempotency_key_sha256,
+                            observation_sha256, observed_count, verified,
+                            reason_code, verified_at, verification_sha256
+                        )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        item["verification_id"],
+                        item["proposal_id"],
+                        item["claim_id"],
+                        item["adapter_id"],
+                        item["adapter_version"],
+                        item["action_kind"],
+                        item["request_sha256"],
+                        item["idempotency_key_sha256"],
+                        item["observation_sha256"],
+                        item["observed_count"],
+                        int(item["verified"]),
+                        item["reason_code"],
+                        item["verified_at"],
+                        item["verification_sha256"],
+                    ),
+                )
+                connection.commit()
+                return item, True
+            except Exception:
+                connection.rollback()
+                raise
+
+    def get_verified_action_verification(
+        self,
+        proposal_id: str,
+    ) -> dict[str, Any] | None:
+        """Return the immutable read-back result for one proposal, if any."""
+
+        if not isinstance(proposal_id, str) or not _SAFE_ID_RE.fullmatch(
+            proposal_id
+        ):
+            return None
+        with self._lock, closing(self._connect()) as connection:
+            row = connection.execute(
+                """
+                SELECT verification_id, proposal_id, claim_id, adapter_id,
+                       adapter_version, action_kind, request_sha256,
+                       idempotency_key_sha256, observation_sha256,
+                       observed_count, verified, reason_code, verified_at,
+                       verification_sha256
+                  FROM verified_action_verifications
+                 WHERE proposal_id = ?
+                """,
+                (proposal_id,),
+            ).fetchone()
+        return (
+            self._decode_verified_action_verification(row)
+            if row is not None
+            else None
+        )
+
+    def get_verified_action_timeline_snapshot(
+        self,
+        proposal_id: str,
+    ) -> dict[str, Any] | None:
+        """Read the immutable lifecycle sources in one consistent snapshot."""
+
+        if not isinstance(proposal_id, str) or not _SAFE_ID_RE.fullmatch(
+            proposal_id
+        ):
+            return None
+        with self._lock, closing(self._connect()) as connection:
+            connection.execute("BEGIN")
+            try:
+                proposal_row = connection.execute(
+                    """
+                    SELECT proposal_id, storage_id, action_id, policy_id,
+                           action_kind, payload_sha256, requested_by, risk,
+                           created_at, expires_at, proposal_sha256
+                      FROM action_proposals
+                     WHERE proposal_id = ?
+                    """,
+                    (proposal_id,),
+                ).fetchone()
+                if proposal_row is None:
+                    connection.commit()
+                    return None
+                proposal = self._decode_action_proposal(proposal_row)
+                approval_row = connection.execute(
+                    """
+                    SELECT approval_id, proposal_id, proposal_sha256, outcome,
+                           decided_by, reason_code, decided_at
+                      FROM human_approval_decisions
+                     WHERE proposal_id = ?
+                    """,
+                    (proposal_id,),
+                ).fetchone()
+                claim_row = connection.execute(
+                    """
+                    SELECT claim_id, proposal_id, approval_id, action_id,
+                           gate_decision_id, gate_decision_sha256, claimed_at
+                      FROM approval_execution_claims
+                     WHERE proposal_id = ?
+                    """,
+                    (proposal_id,),
+                ).fetchone()
+                claim = (
+                    self._decode_approval_claim(claim_row)
+                    if claim_row is not None
+                    else None
+                )
+                if claim is not None:
+                    gate_row = connection.execute(
+                        """
+                        SELECT decision_id, storage_id, action_id, policy_id,
+                               observed_verdict, authorized,
+                               reason_codes_json, decided_at
+                          FROM action_decisions
+                         WHERE decision_id = ?
+                        """,
+                        (claim["gate_decision_id"],),
+                    ).fetchone()
+                else:
+                    gate_row = connection.execute(
+                        """
+                        SELECT decision_id, storage_id, action_id, policy_id,
+                               observed_verdict, authorized,
+                               reason_codes_json, decided_at
+                          FROM action_decisions
+                         WHERE storage_id = ?
+                           AND action_id = ?
+                           AND decided_at >= ?
+                         ORDER BY decided_at DESC, decision_id DESC
+                         LIMIT 1
+                        """,
+                        (
+                            proposal["storage_id"],
+                            proposal["action_id"],
+                            proposal["created_at"],
+                        ),
+                    ).fetchone()
+                verification_row = connection.execute(
+                    """
+                    SELECT verification_id, proposal_id, claim_id, adapter_id,
+                           adapter_version, action_kind, request_sha256,
+                           idempotency_key_sha256, observation_sha256,
+                           observed_count, verified, reason_code, verified_at,
+                           verification_sha256
+                      FROM verified_action_verifications
+                     WHERE proposal_id = ?
+                    """,
+                    (proposal_id,),
+                ).fetchone()
+                completion_row = (
+                    connection.execute(
+                        """
+                        SELECT completion_id, claim_id, outcome, reason_code,
+                               completed_at
+                          FROM approval_execution_completions
+                         WHERE claim_id = ?
+                        """,
+                        (claim["claim_id"],),
+                    ).fetchone()
+                    if claim is not None
+                    else None
+                )
+                snapshot = {
+                    "proposal": proposal,
+                    "approval": (
+                        self._decode_human_approval(approval_row)
+                        if approval_row is not None
+                        else None
+                    ),
+                    "gate": (
+                        self._decode_action_decision(gate_row)
+                        if gate_row is not None
+                        else None
+                    ),
+                    "claim": claim,
+                    "verification": (
+                        self._decode_verified_action_verification(
+                            verification_row
+                        )
+                        if verification_row is not None
+                        else None
+                    ),
+                    "completion": (
+                        self._decode_approval_completion(completion_row)
+                        if completion_row is not None
+                        else None
+                    ),
+                }
+                connection.commit()
+                return snapshot
+            except Exception:
+                connection.rollback()
+                raise
 
     def configure_stale_reevaluation(
         self,

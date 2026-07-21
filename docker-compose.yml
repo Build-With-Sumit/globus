@@ -46,7 +46,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: globus:0.14.0
+    image: globus:0.15.0
     restart: unless-stopped
     depends_on:
       db:

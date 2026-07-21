@@ -119,9 +119,13 @@ agent_runner    ◄─── (OSS orchestrator + MySQL run row)
    └── globus_truth.agent_adapter
           ├── evaluator      (deterministic receipt verdict)
           ├── service        (ingest + stale-aware reads)
-          ├── storage        (immutable receipt, verdict, approval + claim history)
+          ├── storage        (immutable receipt, approval, claim + verification history)
           ├── action_gate    (fail-closed policy authorization)
           ├── approval_center (payload-free consent + fresh-Truth execution)
+          ├── verified_actions (strict manifests + bound execution lifecycle)
+          ├── reference_actions (generated local email-draft + CRM-note adapters)
+          ├── verified_action_timeline (six stages derived from one DB snapshot)
+          ├── verified_action_lab (credential-free reference-adapter proof)
           ├── platform_registry (validated source-backed capability map)
           ├── judge_mode     (credential-free real-byte challenge)
           ├── outcome_challenge (read-back → receipt → gate proof)
@@ -266,6 +270,47 @@ bounded generated local callback. The HTTP service refuses non-loopback binds;
 identities, so operating-system/process access to localhost is the trust
 boundary.
 
+## Data flow — v0.15 Verified Action SDK
+
+`verified_actions.VerifiedActionSDK` makes destination verification part of
+the action contract rather than an optional statement after execution:
+
+1. Registry loading accepts only an exact manifest shape, allowlisted action
+   kind, explicit approval, supported Truth policy, deny-by-default local
+   permissions, deterministic idempotency strategy, and independent read-back
+   mode.
+2. `prepare()` validates a strict canonical-JSON request and hashes an envelope
+   containing the adapter ID, adapter version, action kind, and exact payload.
+   The Approval Center receives that digest, not the payload.
+3. The deterministic idempotency key binds proposal ID, adapter identity and
+   version, action kind, and request digest.
+4. The injected authorization runner wraps execution in the existing human
+   approval, fresh Truth Gate, and unique-claim boundary.
+5. After the local effect, the adapter opens a new query-only SQLite
+   connection, reconstructs the observed request digest, and verifies the
+   effect identity and binding.
+6. `verified_action_verifications` records only proposal/claim/adapter
+   identifiers, hashes, observed count, result, reason, and time. Update and
+   delete triggers make the record immutable, and binding triggers require it
+   to agree with the proposal and claim.
+7. For `verified.*` actions, a database trigger rejects completion unless a
+   destination-verification record exists and the completion outcome matches
+   its result.
+
+`verified_action_timeline` reads the proposal, human decision, bound gate
+decision, execution claim, destination verification, and completion in one
+SQLite snapshot and derives exactly six fixed events. It does not create a
+second mutable event table. A claim without verification/completion is
+`indeterminate` and is never described as success or automatically retried.
+Legacy Approval Center completions remain readable but are not retroactively
+called destination-verified.
+
+The shipped `EmailDraftAdapter` and `CRMNoteAdapter` operate only against a
+generated local SQLite sandbox. They model provider action semantics for the
+conformance path but make zero provider or network calls, connect no account,
+send no email, and update no external CRM. v0.15 has not been deployed to the
+production Globus server.
+
 ## Data flow — credential-free Approval Center proof
 
 `approval_challenge` exercises that boundary without credentials or external
@@ -318,7 +363,7 @@ allowed status/setup/risk/approval/read-back values, duplicate IDs, declared
 counts, source paths, and accidental secret-like content before data reaches
 the UI/API.
 
-The v0.14 registry has 71 entries: 4 built-in agents, 20 LLM-facing tools,
+The v0.15 registry has 71 entries: 4 built-in agents, 20 LLM-facing tools,
 33 implemented/setup-required provider adapters (9 lead-source, 8
 verification, 6 sender, and 10 CRM), plus connector, channel, and model-route
 entries. Registry status is not connection status:
