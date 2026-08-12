@@ -1,0 +1,22 @@
+-- 0001_baseline — the point migrations start from.
+--
+-- This file creates nothing on purpose. `schema/globus_schema.sql` is the full
+-- bootstrap for a fresh install and remains so; migrations record CHANGES made
+-- after that file, one numbered step at a time.
+--
+-- An install that already ran globus_schema.sql should mark this applied
+-- without executing anything:
+--
+--     python3 scripts/migrate.py baseline
+--
+-- A fresh install gets it for free: `migrate.py up` after the bootstrap applies
+-- this no-op and records it, and every later migration then has a defined
+-- starting point.
+--
+-- Why a baseline exists at all: without one, the first real migration cannot
+-- tell "this database predates migrations and already has the tables" from
+-- "this database is empty and needs everything". Those two states need opposite
+-- handling, and guessing between them is how a migration runner drops a column
+-- someone's production data is sitting in.
+
+SELECT 'baseline' AS migration;
