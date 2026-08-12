@@ -186,8 +186,8 @@ public asset smoke tests—with:
 python scripts/test_all.py
 ```
 
-The v0.15 release gate passes all **164 Truth/Mission Control tests** and all
-**11 repository-wide check groups**.
+The release gate passes all **171 Truth/Mission Control tests** and all
+**14 repository-wide check groups** (`python3 scripts/test_all.py`).
 
 For a camera-friendly explanation of what we built—including the exact Codex
 and GPT-5.6 contribution, a reel script, a longer YouTube script, screen cues,

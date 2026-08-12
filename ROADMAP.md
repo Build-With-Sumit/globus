@@ -679,9 +679,9 @@ This is a direction, not a claim of OpenClaw parity.
 - [ ] Apply the Consequence Firewall to one reversible real-provider workflow
   with provider idempotency keys, destination acknowledgement/read-back,
   reconciliation, and audit export.
-- [ ] Add proper versioned migrations for both MySQL and Truth SQLite state.
-  **MySQL half shipped in v0.17** (`scripts/migrate.py` + `schema/migrations/`);
-  the Truth SQLite state is still unversioned, which is the remaining half.
+- [x] ✅ Add proper versioned migrations for both MySQL and Truth SQLite state.
+  **Both shipped in v0.17** — `scripts/migrate.py` + `schema/migrations/` for
+  MySQL, and `PRAGMA user_version` + in-code steps for the embedded Truth store.
 
 **Next 60 days — add a narrow, safe extension SDK**
 
@@ -817,10 +817,20 @@ not check, so the feature does nothing forever while every log line says it ran.
 - ✅ 29 behavioural tests, including a statement splitter that does not cut on a
   semicolon inside a string, a backtick identifier, or a comment.
 
+- ✅ **The Truth Layer's SQLite state is versioned too**, by a deliberately
+  DIFFERENT mechanism, because it is a different kind of store: it is EMBEDDED
+  — created and owned by the library, not administered by an operator — so its
+  steps live in code that ships with it rather than in files someone has to
+  remember to run, and its version lives in `PRAGMA user_version` inside the
+  database file, where it cannot drift away from the data it describes. It also
+  gets a guarantee MySQL cannot offer: **SQLite DDL is transactional**, so each
+  step is atomic and a failure leaves the version untouched.
+  Step 1 replaces an ad-hoc `PRAGMA table_info` patch that ran inline on every
+  single connect and recorded nothing — which is exactly why it is written to
+  tolerate finding its own result. 7 new tests (Truth suite 164 → 171).
+
 v0.17 also closes the two things v0.16 shipped without — the desk-grant admin UI
 and the desk digest (see the v0.16 section above for both).
-
-Remaining: the Truth Layer's SQLite state is still unversioned.
 
 ## v1.0 — production-ready
 
