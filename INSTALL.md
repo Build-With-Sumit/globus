@@ -726,13 +726,44 @@ python tests/test_desk_agents.py
 
 ```bash
 git pull
-mysql -u globus -p globus < schema/globus_schema.sql
+python3 scripts/migrate.py status     # what this database is missing
+python3 scripts/migrate.py up         # apply it
 pip install -r requirements.txt
 sudo systemctl restart globus.service
 ```
 
-The schema file safely creates missing tables for bootstrap, but
-`CREATE TABLE IF NOT EXISTS` does not add or alter columns on an existing
-installation. Review schema changes between your current commit and the target
-commit and apply any explicit column/data migration before restarting. A formal
-migration framework remains roadmap work.
+**If you installed before migrations existed**, your database already has the
+schema, so tell the runner that once — it records every current migration as
+applied without executing any of them:
+
+```bash
+python3 scripts/migrate.py baseline
+```
+
+Skipping that step leaves every migration pending, and the next `up` will try to
+apply changes your database already has.
+
+`schema/globus_schema.sql` is still the bootstrap for a FRESH install; it creates
+missing tables but `CREATE TABLE IF NOT EXISTS` can never add or alter a column
+on an existing one. That is what `schema/migrations/NNNN_name.sql` is for, and
+what `schema_migrations` records.
+
+Three things about the runner worth knowing before you rely on it:
+
+- **It fails loudly, on purpose.** It uses a raw connection rather than the
+  app's `db_write`, which is fail-soft and returns `False` on any error. A write
+  against a table a migration never created would otherwise return `False` into a
+  caller that does not check, and the feature would do nothing forever while
+  every log line said it ran.
+- **MySQL DDL cannot be rolled back.** `CREATE`/`ALTER` implicitly commit, so a
+  file that fails on its third statement leaves the first two applied. The runner
+  stops at that file, does not record it, and tells you exactly which statement
+  went — but it cannot undo the rest. Keep each migration small enough that a
+  partial application is obvious.
+- **Never edit a migration that has already been applied.** `status` reports it
+  as `CHANGED`, because your database has the old shape and so does everyone
+  else's. Add a new migration instead.
+
+```bash
+python tests/test_migrations.py
+```

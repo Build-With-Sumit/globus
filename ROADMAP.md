@@ -680,6 +680,8 @@ This is a direction, not a claim of OpenClaw parity.
   with provider idempotency keys, destination acknowledgement/read-back,
   reconciliation, and audit export.
 - [ ] Add proper versioned migrations for both MySQL and Truth SQLite state.
+  **MySQL half shipped in v0.17** (`scripts/migrate.py` + `schema/migrations/`);
+  the Truth SQLite state is still unversioned, which is the remaining half.
 
 **Next 60 days — add a narrow, safe extension SDK**
 
@@ -706,7 +708,7 @@ This is a direction, not a claim of OpenClaw parity.
 - [ ] Add encrypted secret management, audit export, retention controls, and
   deployment hardening before describing the platform as production-ready.
 
-## v0.16 (current) — Shared inboxes: desk agents
+## v0.16 — Shared inboxes: desk agents
 
 Everything before this treats mail as the OPERATOR's own. v0.16 covers the other
 shape: shared inboxes ("desks") owned by members of staff, each needing the same
@@ -767,6 +769,42 @@ Not built yet: an admin UI for the grants (they are set from the CLI;
 `org_portal_html.org_desk_agents_html` renders the read-only view), and a digest
 that rolls desk activity up into one notification.
 
+## v0.17 (current) — Versioned schema migrations
+
+Until now the schema was one big `CREATE TABLE IF NOT EXISTS` bootstrap, and
+nothing recorded what any given database had actually received. That fails
+quietly rather than loudly: code deployed against a column nobody added does not
+break at startup, it breaks on the one path that touches it — and because the
+app's DB helper is fail-soft by design (`db_write` returns `False` on any
+error), a write against a missing table returns `False` into a caller that does
+not check, so the feature does nothing forever while every log line says it ran.
+
+- ✅ **`schema/migrations/NNNN_name.sql`** — numbered, checksummed steps.
+  `globus_schema.sql` stays the bootstrap for a FRESH install; migrations record
+  what changed after it.
+- ✅ **`schema_migrations` ledger** — version, name, SHA-256, applied_at.
+- ✅ **`scripts/migrate.py status | up [--dry-run] | baseline`.** `baseline`
+  exists because an install that predates migrations already HAS the tables:
+  without it, the first real migration cannot tell "this database is ahead" from
+  "this database is empty", and those need opposite handling.
+- ✅ **It fails loudly**, using a raw connection rather than `db_write`.
+- ✅ **It refuses rather than guesses.** A file not named `NNNN_name.sql` is
+  refused, never skipped — a silently ignored migration looks exactly like an
+  applied one. A migration numbered BELOW the highest already applied is refused
+  too: that is two branches numbered independently and merged, and applying it
+  now runs the steps in an order no environment has tested.
+- ✅ **Honest about MySQL.** DDL implicitly commits, so a file failing on its
+  third statement leaves the first two applied and nothing can roll that back.
+  The runner stops at that file, does not record it, and names the exact
+  statement — rather than implying an atomicity MySQL does not offer.
+- ✅ **Drift detection.** A migration edited after it was applied shows as
+  `CHANGED`, because your database has the old shape and so does everyone
+  else's.
+- ✅ 29 behavioural tests, including a statement splitter that does not cut on a
+  semicolon inside a string, a backtick identifier, or a comment.
+
+Remaining: the Truth Layer's SQLite state is still unversioned.
+
 ## v1.0 — production-ready
 
 Shipped:
@@ -792,8 +830,10 @@ Still ahead:
   deep-mode `GET /api/health?deep=1` JSON endpoint with per-subsystem
   ok/error status (DB / storage / Fernet / persona / LLM provider).
   The shallow `/api/health` stays cheap for load balancer probes.
-- [ ] **Migration framework** — proper versioned schema migrations
-  instead of "re-run the .sql, it's idempotent" pattern.
+- [x] ✅ **Migration framework** (v0.17) — `schema/migrations/NNNN_name.sql`,
+  a `schema_migrations` ledger, and `scripts/migrate.py status|up|baseline`,
+  replacing the "re-run the .sql, it's idempotent" pattern. MySQL only; the
+  Truth SQLite state is still unversioned (see the 30/60 item above).
 - [ ] **Plugin architecture** — pip-installable extensions for
   custom data sources + custom tools (see ADR-007 in the
   buildwithsumit reference docs).

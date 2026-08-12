@@ -293,7 +293,11 @@ Globus is opinionated. Bring your own:
 
 ## Status
 
-- **v0.16 (current)** — **shared inboxes**. Four opt-in, draft-first agents for
+- **v0.17 (current)** — **versioned schema migrations**. Numbered, checksummed
+  steps under `schema/migrations/`, a `schema_migrations` ledger, and
+  `scripts/migrate.py status|up|baseline`. Upgrading is no longer "re-run the
+  .sql and hope"; see [INSTALL.md](INSTALL.md#upgrading).
+- **v0.16** — **shared inboxes**. Four opt-in, draft-first agents for
   mailboxes owned by your STAFF rather than by you (support@, sales@, billing@):
   rescue business mail wrongly filed as spam, draft replies to people who are
   waiting, nudge threads that went quiet, and learn from the edits the human
