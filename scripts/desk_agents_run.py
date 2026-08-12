@@ -6,6 +6,7 @@ Usage:
   python3 scripts/desk_agents_run.py respond   [<mailbox>]
   python3 scripts/desk_agents_run.py followup  [<mailbox>]
   python3 scripts/desk_agents_run.py learn     [<mailbox>]
+  python3 scripts/desk_agents_run.py digest            # roll up + notify
   python3 scripts/desk_agents_run.py desks             # list what is configured
   python3 scripts/desk_agents_run.py grant <mailbox> <agent> [on|off]
 
@@ -48,6 +49,11 @@ taking the others down, and staggers the load:
   # Learn from what the humans did, once a night, after they have acted.
   40 21 * * *   cd /opt/globus && flock -n /tmp/desk-learn.lock \\
       .venv/bin/python3 scripts/desk_agents_run.py learn \\
+      >> /var/log/globus-desk-agents.log 2>&1
+
+  # One roll-up a day: what happened, and what is still waiting on a human.
+  0 3 * * *     cd /opt/globus && .venv/bin/python3 \\
+      scripts/desk_agents_run.py digest \\
       >> /var/log/globus-desk-agents.log 2>&1
 """
 from __future__ import annotations
@@ -93,17 +99,64 @@ def _desks(scope):
     return desks
 
 
+def _notify(text):
+    """Deliver one digest chunk. Returns True only on a CONFIRMED send.
+
+    Falls back to stdout when no chat transport is configured — cron captures
+    that to the log, which is honest. It must never return True for a delivery
+    that did not happen."""
+    from db_helpers import cfg
+    chat_id = cfg("DESK_TELEGRAM_CHAT_ID", "") or ""
+    owner = cfg("DESK_TELEGRAM_MEMBER", "") or ""
+    if chat_id and owner:
+        try:
+            from telegram_bot import send_via_member_bot
+            res = send_via_member_bot(owner, chat_id, text,
+                                      initiator="desk-agents") or {}
+            if not res.get("ok"):
+                print(f"[desk-agents] telegram send failed: {res.get('error')}",
+                      flush=True)
+            return bool(res.get("ok"))
+        except Exception as e:
+            print(f"[desk-agents] telegram send error: "
+                  f"{type(e).__name__}: {e}", flush=True)
+            return False
+    print(text, flush=True)
+    return True
+
+
 def main():
     argv = sys.argv[1:]
-    if not argv or argv[0] not in (*MODES, "desks", "grant"):
+    if not argv or argv[0] not in (*MODES, "desks", "grant", "digest"):
         print("usage: desk_agents_run.py rescue|respond|followup|learn "
-              "[<mailbox>] | desks | grant <mailbox> <agent> [on|off]",
+              "[<mailbox>] | digest | desks | grant <mailbox> <agent> [on|off]",
               file=sys.stderr)
         return 1
     mode = argv[0]
     _boot()
     import email_desks as D
     import desk_agents as A
+
+    if mode == "digest":
+        desks = D.configured_desks()
+        if not desks:
+            print("No desks configured — nothing to report on.", file=sys.stderr)
+            return 1
+        try:
+            chunks = A.build_desk_digest(
+                desks,
+                lookback_hours=int(os.environ.get("DESK_DIGEST_HOURS", "24")),
+                stale_hours=int(os.environ.get("DESK_STALE_HOURS", "26")))
+        except Exception as e:
+            print(f"[desk-agents] digest build failed: {type(e).__name__}: {e}",
+                  file=sys.stderr)
+            return 2
+        for (text,) in chunks:
+            if D.envflag("DESK_DRYRUN", False):
+                print(text, flush=True)
+            else:
+                _notify(text)
+        return 0
 
     if mode == "desks":
         desks = D.configured_desks()

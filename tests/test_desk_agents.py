@@ -337,6 +337,74 @@ for raw, want in (("0", False), ("false", False), ("off", False),
 os.environ.pop("_DESK_TEST_FLAG", None)
 
 
+# ── the digest ───────────────────────────────────────────────────────────
+# A digest that cannot tell "nothing happened" from "nothing ran" will
+# eventually report a confident all-clear over a dead pipeline.
+print("digest:")
+
+_DESKS = [{"mailbox": "support@acme.example", "product": "Acme",
+           "owner": "staff@acme.example"}]
+
+
+def _digest(granted, ages, rows=None):
+    """Build a digest with the given grants, beacon ages and pending rows."""
+    D.agent_enabled = lambda mb, a, default=False: a in granted
+    D.beacon_ages = lambda: ages
+    A.agent_enabled = D.agent_enabled
+    A.beacon_ages = D.beacon_ages
+    A.desk_activity = lambda mbs, lookback_hours=24: {
+        m: {"rescued": 1, "drafted": 2, "nudged": 3, "lessons": 4} for m in mbs}
+    A.pending_drafts = lambda mbs, limit=200: (rows or [])
+    return A.build_desk_digest(_DESKS)
+
+
+_real_enabled, _real_ages = D.agent_enabled, D.beacon_ages
+_real_activity, _real_pending = A.desk_activity, A.pending_drafts
+
+out = _digest(granted=[], ages={})[0][0]
+check("with NOTHING granted it says so — never an all-clear",
+      "nothing is granted" in out and "✅" not in out)
+
+out = _digest(granted=["responder"], ages={})[0][0]
+check("a granted agent that has NEVER run is reported as not reporting",
+      "NOT REPORTING" in out and "never" in out)
+check("...and no all-clear is emitted alongside that warning", "✅" not in out)
+
+out = _digest(granted=["responder"],
+              ages={("responder", "support@acme.example"): 99.0})[0][0]
+check("a STALE beacon is reported as not reporting", "NOT REPORTING" in out)
+
+out = _digest(granted=["responder"],
+              ages={("responder", "support@acme.example"): 1.0})[0][0]
+check("a fresh beacon with no pending drafts gives a real all-clear",
+      "✅ No drafts waiting" in out and "NOT REPORTING" not in out)
+check("...and the activity roll-up is included",
+      "1 rescued from spam" in out and "2 replies drafted" in out)
+
+out = _digest(granted=["responder", "learning"],
+              ages={("responder", "support@acme.example"): 1.0})[0][0]
+check("one silent agent on an otherwise healthy desk is still named",
+      "NOT REPORTING" in out and "learning" in out)
+
+rows = [{"mailbox": "support@acme.example", "subject": f"Question {i}",
+         "customer_email": f"buyer{i}@outside.example", "category": "sales_inquiry",
+         "thread_id": f"th{i}"} for i in range(60)]
+chunks = _digest(granted=["responder"],
+                 ages={("responder", "support@acme.example"): 1.0}, rows=rows)
+check("a big day chunks rather than emitting one oversized message",
+      len(chunks) > 1)
+check("...and every chunk respects the transport limit",
+      all(len(c[0]) <= 3500 + 400 for c in chunks))
+check("...and every pending draft appears exactly once across the chunks",
+      sum(c[0].count("outside.example") for c in chunks) == 60)
+check("the deep link pins the mailbox with authuser",
+      "authuser=support@acme.example" in chunks[0][0])
+
+D.agent_enabled, D.beacon_ages = _real_enabled, _real_ages
+A.agent_enabled, A.beacon_ages = _real_enabled, _real_ages
+A.desk_activity, A.pending_drafts = _real_activity, _real_pending
+
+
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:
     for f in FAIL:

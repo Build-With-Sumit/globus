@@ -49,11 +49,12 @@ from globus_llm import globus_call_chat
 
 from email_desks import (
     AGENT_FOLLOWUP, AGENT_LEARNING, AGENT_RESPONDER, AGENT_SPAM_RESCUE,
-    DeskSession, _cfg, _int, agent_enabled, agent_model, append_lesson,
-    bare_email, content_of, customer_is_last_responder, decode_body, envflag,
-    gapi, is_external, load_lessons, parse_json, product_for, reply_subject,
-    rescue_from_spam, stamp_beacon, throttle, upsert_thread_draft,
-    we_spoke_last, withdraw_stale_drafts,
+    DESK_AGENTS, DeskSession, _cfg, _int, agent_enabled, agent_model,
+    append_lesson, bare_email, beacon_ages, content_of,
+    customer_is_last_responder, decode_body, envflag, gapi, is_external,
+    load_lessons, parse_json, product_for, reply_subject, rescue_from_spam,
+    stamp_beacon, throttle, upsert_thread_draft, we_spoke_last,
+    withdraw_stale_drafts,
 )
 
 DEFAULT_CATEGORIES = [
@@ -776,6 +777,156 @@ def _ask(system, user, max_tokens, model):
     never as a default verdict — because a fabricated judgment is
     indistinguishable from a real one the moment it is written down."""
     return parse_json(_call(system, user, max_tokens, model))
+
+
+# ─────────────────────────────────────────────────────────────────────
+# The digest — heartbeat gated
+# ─────────────────────────────────────────────────────────────────────
+# Agents that run and report nowhere are half a feature. The thing a human must
+# actually DO is review pending drafts, so that is what this leads with.
+
+def pending_drafts(mailboxes, limit=200):
+    """Drafts still waiting for a human, OLDEST first.
+
+    Oldest first on purpose: the draft that has sat longest belongs to the
+    customer who has waited longest. Newest-first buries precisely the item that
+    has gone worst."""
+    if not mailboxes:
+        return []
+    placeholders = ",".join(["%s"] * len(mailboxes))
+    return db_read(
+        f"SELECT mailbox, product, owner_email, customer_email, subject, "
+        f"category, thread_id, created_at FROM desk_replies "
+        f"WHERE mode='draft' AND mailbox IN ({placeholders}) "
+        f"ORDER BY created_at ASC LIMIT {int(limit)}", tuple(mailboxes)) or []
+
+
+def desk_activity(mailboxes, lookback_hours=24):
+    """{mailbox: {rescued, drafted, nudged, lessons}} over the window."""
+    out = {m: {"rescued": 0, "drafted": 0, "nudged": 0, "lessons": 0}
+           for m in mailboxes}
+    if not mailboxes:
+        return out
+    placeholders = ",".join(["%s"] * len(mailboxes))
+    params = tuple(mailboxes) + (lookback_hours,)
+    for key, sql in (
+        ("rescued", f"SELECT mailbox, COUNT(*) c FROM desk_spam_rescues "
+                    f"WHERE action='moved' AND mailbox IN ({placeholders}) "
+                    f"AND created_at > NOW() - INTERVAL %s HOUR GROUP BY mailbox"),
+        ("drafted", f"SELECT mailbox, COUNT(*) c FROM desk_replies "
+                    f"WHERE mailbox IN ({placeholders}) "
+                    f"AND created_at > NOW() - INTERVAL %s HOUR GROUP BY mailbox"),
+        ("nudged",  f"SELECT mailbox, COUNT(*) c FROM desk_followups "
+                    f"WHERE mailbox IN ({placeholders}) "
+                    f"AND created_at > NOW() - INTERVAL %s HOUR GROUP BY mailbox"),
+        # Only genuine lessons. The learner also records "sent as drafted" and
+        # "rescue accepted" — those are how it remembers it already looked, not
+        # things it learned, and counting them would report a busy learning loop
+        # on a desk that has learned nothing.
+        ("lessons", f"SELECT mailbox, COUNT(*) c FROM desk_lessons_seen "
+                    f"WHERE mailbox IN ({placeholders}) "
+                    f"AND created_at > NOW() - INTERVAL %s HOUR "
+                    f"AND lesson NOT IN ('sent as drafted','cosmetic edit',"
+                    f"'rescue accepted') GROUP BY mailbox"),
+    ):
+        for row in (db_read(sql, params) or []):
+            if row.get("mailbox") in out:
+                out[row["mailbox"]][key] = int(row.get("c") or 0)
+    return out
+
+
+def _thread_link(mailbox, thread_id):
+    """Deep link into the RIGHT mailbox. `authuser` matters: without it every
+    link in a multi-desk digest opens in whichever account happens to be signed
+    in first, which for shared desks is rarely the one that holds the thread."""
+    return f"https://mail.google.com/mail/u/?authuser={mailbox}#all/{thread_id}"
+
+
+def build_desk_digest(desks, lookback_hours=24, stale_hours=26, max_chars=3500):
+    """→ [(text,)] — one entry per deliverable chunk.
+
+    Heartbeat gated, for the reason every digest in this codebase is: one that
+    cannot tell "nothing happened" from "nothing ran" will eventually report a
+    confident all-clear over a pipeline dead for weeks. An empty result is only
+    good news if something actually looked.
+
+    The gate is per (desk, agent) and considers GRANTED agents only. An agent
+    nobody switched on is not "down", and listing it as such trains the reader
+    to skim past the warning that matters.
+
+    Chunking is not cosmetic: most chat transports hard-reject an oversized
+    message, so an un-chunked digest that outgrows the limit fails, comes back
+    tomorrow BIGGER, and is then silently dead forever while the agents go on
+    looking healthy."""
+    ages = beacon_ages()
+    granted, silent = {}, []
+    for desk in desks:
+        mailbox = desk["mailbox"]
+        on = [a for a in DESK_AGENTS if agent_enabled(mailbox, a)]
+        granted[mailbox] = on
+        for agent in on:
+            age = ages.get((agent, mailbox))
+            if age is None or age > stale_hours:
+                silent.append((mailbox, agent, age))
+
+    with_agents = [d["mailbox"] for d in desks if granted.get(d["mailbox"])]
+    if not with_agents:
+        # No grants anywhere. Say so plainly rather than emitting an all-clear:
+        # "nothing is switched on" and "everything is quiet" are opposite
+        # situations that produce an identical empty result set.
+        return [(f"📬 Desk agents — nothing is granted on any of the "
+                 f"{len(desks)} configured desk(s). No agent is running.",)]
+
+    reporting = [m for m in with_agents if not any(s[0] == m for s in silent)]
+    header = (f"📬 Desk agents — {len(reporting)}/{len(with_agents)} desk(s) "
+              f"fully reporting")
+
+    warn = ""
+    if silent:
+        lines = [f"  • {mailbox} / {agent} — last run: "
+                 + ("never" if age is None else f"{age:.0f}h ago")
+                 for mailbox, agent, age in silent]
+        warn = ("\n\n🔴 NOT REPORTING — granted but silent:\n" + "\n".join(lines)
+                + "\nNothing can come from these; check the cron and its log.")
+
+    totals = desk_activity(with_agents, lookback_hours)
+    rolled = {k: sum(v[k] for v in totals.values())
+              for k in ("rescued", "drafted", "nudged", "lessons")}
+    summary = (f"\n\nLast {lookback_hours}h — {rolled['rescued']} rescued from "
+               f"spam · {rolled['drafted']} replies drafted · "
+               f"{rolled['nudged']} nudge(s) · {rolled['lessons']} lesson(s)")
+
+    pending = pending_drafts(with_agents)
+    if not pending:
+        # 🔴 The all-clear is gated on something having actually REPORTED. With
+        # every granted agent silent, "no drafts waiting" is not a finding — it
+        # is the absence of one, and printing a green tick beside the red
+        # warning is how a reader learns to trust a dead pipeline. Only claim
+        # the queue is clear if a desk is genuinely reporting.
+        if not reporting:
+            return [(header + warn + summary
+                     + "\n\nNo drafts are recorded — but nothing above is "
+                       "reporting, so that is not an all-clear.",)]
+        return [(header + warn + summary
+                 + "\n\n✅ No drafts waiting for review.",)]
+
+    chunks, cur, count = [], (
+        header + warn + summary
+        + f"\n\n✍️ {len(pending)} draft(s) waiting for a human (oldest first):\n"
+    ), 0
+    for row in pending:
+        block = (f"\n• {row['mailbox']} — "
+                 f"{(row.get('subject') or '(no subject)')[:90]}\n"
+                 f"   from {(row.get('customer_email') or '?')[:70]}"
+                 f"  [{row.get('category') or '?'}]\n"
+                 f"   {_thread_link(row['mailbox'], row.get('thread_id'))}\n")
+        if len(cur) + len(block) > max_chars and count:
+            chunks.append((cur,))
+            cur, count = header + " (cont.)\n", 0
+        cur += block
+        count += 1
+    chunks.append((cur,))
+    return chunks
 
 
 AGENTS = {
