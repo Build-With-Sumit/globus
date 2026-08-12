@@ -519,3 +519,73 @@ def org_terms_html(org, entity="", contact="", updated=""):
         "use after an update constitutes acceptance of the revised Terms.</p>"
     )
     return _legal_page(org, "Terms of Service", s, contact=contact, updated=updated)
+
+
+def org_desk_agents_html(desks=None):
+    """Per-desk view of the shared-inbox agents (see server/desk_agents.py).
+
+    Pure: the caller resolves grants, formats `when`, and counts volume. Returns
+    '' when there is nothing to show, so a deployment that never configured a
+    desk renders no empty panel.
+
+      desks = [{mailbox, product, owner, agents: [
+                  {name, granted, when, stale, note}]}]
+
+    Three states per agent, never two. "off" (nobody granted it), "never run"
+    and "ran N ago" have to be distinguishable at a glance: collapsing the first
+    two into one blank cell is how a granted-but-broken agent hides behind an
+    ungranted one, and the operator reads a dead pipeline as a deliberate
+    choice."""
+    desks = desks or []
+    if not desks:
+        return ""
+
+    def _state(a):
+        if not a.get("granted"):
+            return ("<span class=\"muted small\">off</span>", "")
+        if not a.get("when"):
+            return ("<span style=\"font-size:.62rem;font-weight:700;color:#9a6a00;"
+                    "background:#FFF0D6;padding:.08rem .45rem;border-radius:999px\">"
+                    "NEVER RAN</span>", "granted, but no run has ever completed")
+        if a.get("stale"):
+            return ("<span style=\"font-size:.62rem;font-weight:700;color:#B91C1C;"
+                    "background:#FCE4E4;padding:.08rem .45rem;border-radius:999px\">"
+                    "STALE</span>", esc(a.get("when") or ""))
+        return ("<span style=\"font-size:.62rem;font-weight:700;color:#296A3D;"
+                "background:#E0EEDE;padding:.08rem .45rem;border-radius:999px\">"
+                "ACTIVE</span>", esc(a.get("when") or ""))
+
+    blocks = []
+    for d in desks:
+        rows = []
+        for a in (d.get("agents") or []):
+            pill, when = _state(a)
+            rows.append(
+                "<tr style=\"border-top:1px solid var(--border,#eee)\">"
+                "<td style=\"padding:.45rem .4rem;white-space:nowrap\"><strong>"
+                + esc(a.get("name") or "") + "</strong></td>"
+                "<td style=\"padding:.45rem .4rem;white-space:nowrap\">" + pill + "</td>"
+                "<td style=\"padding:.45rem .4rem\" class=\"muted small\">"
+                + when + "</td>"
+                "<td style=\"padding:.45rem .4rem\" class=\"small\">"
+                + esc(a.get("note") or "") + "</td></tr>")
+        blocks.append(
+            "<div class=\"card\" style=\"margin-top:1rem\">"
+            "<div style=\"display:flex;justify-content:space-between;"
+            "align-items:baseline;flex-wrap:wrap;gap:.5rem\">"
+            "<strong>" + esc(d.get("mailbox") or "") + "</strong>"
+            "<span class=\"muted small\">" + esc(d.get("product") or "")
+            + (" · " + esc(d.get("owner")) if d.get("owner") else "") + "</span></div>"
+            "<div style=\"overflow-x:auto\"><table style=\"width:100%;"
+            "border-collapse:collapse;min-width:460px;margin-top:.5rem\">"
+            "<thead><tr class=\"muted small\" style=\"text-align:left\">"
+            "<th style=\"padding:.3rem .4rem\">Agent</th>"
+            "<th style=\"padding:.3rem .4rem\">State</th>"
+            "<th style=\"padding:.3rem .4rem\">Last run</th>"
+            "<th style=\"padding:.3rem .4rem\">Recent</th></tr></thead>"
+            "<tbody>" + "".join(rows) + "</tbody></table></div></div>")
+
+    return ("<h3 class=\"category-head\" style=\"margin-top:1.6rem\">Shared inboxes</h3>"
+            "<p class=\"muted small\">Every agent is off for every desk until it is "
+            "granted. Drafts are left for the desk owner to review and send.</p>"
+            + "".join(blocks))
