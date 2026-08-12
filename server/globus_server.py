@@ -176,7 +176,7 @@ from org_db import (  # noqa: E402
 from org_portal_html import (  # noqa: E402
     org_login_html, org_code_html, org_home_html, org_chat_html,
     org_connect_html, org_admin_html, org_privacy_html, org_terms_html,
-    org_no_agents_html,
+    org_no_agents_html, org_desk_grants_html,
 )
 from globus_agents_catalog import GLOBUS_AGENTS_CATALOG  # noqa: E402
 from auth_cookies import make_cookie, CLEAR_COOKIE  # noqa: E402
@@ -760,6 +760,50 @@ class Handler(BaseHTTPRequestHandler):
         return [(a.get("name"), a.get("role") or a.get("name"))
                 for a in GLOBUS_AGENTS_CATALOG if a.get("name")]
 
+    _DESK_AGENT_LABELS = (
+        ("spam_rescue", "Spam rescue"), ("responder", "Responder"),
+        ("followup", "Follow-up"), ("learning", "Learning"),
+    )
+
+    def _desk_grants_html(self):
+        """The shared-inbox grant matrix, or '' when the feature is unused.
+
+        Fail-soft on purpose: the desk agents are optional, and an install
+        without them configured (or without the tables migrated yet) must still
+        get a working admin console rather than a 500."""
+        try:
+            import email_desks as D
+            desks = D.configured_desks()
+            if not desks:
+                return ""
+            for d in desks:
+                d["granted"] = [a for a in D.DESK_AGENTS
+                                if D.agent_enabled(d["mailbox"], a)]
+            return org_desk_grants_html(desks, list(self._DESK_AGENT_LABELS))
+        except Exception:
+            return ""
+
+    def _set_desk_grant(self, mailbox, agent, enabled):
+        """Switch a desk agent on or off. True if it was applied.
+
+        🔴 The mailbox is checked against the CONFIGURED desks, not taken from
+        the form. The form is user input: without this, an admin could post any
+        address and have the agents start working a mailbox that was never
+        meant to be a desk — reading its mail, and in the rescue agent's case
+        moving it. The rendered page only ever offers real desks, but a page is
+        not an authorization boundary; this is."""
+        try:
+            import email_desks as D
+            if agent not in D.DESK_AGENTS:
+                return False
+            allowed = {d["mailbox"].lower() for d in D.configured_desks()}
+            if mailbox not in allowed:
+                return False
+            D.grant(mailbox, agent, enabled=enabled)
+            return True
+        except Exception:
+            return False
+
     def _org_granted_slugs(self, email, org):
         """Which agents this employee may see and run.
 
@@ -853,7 +897,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send_html(200, org_admin_html(
                 org, email, list_org_members(org["id"]),
                 list_grants(org["id"]), self._org_agent_options(),
-                message=(qs.get("msg") or [""])[0]))
+                message=(qs.get("msg") or [""])[0],
+                desk_html=self._desk_grants_html()))
 
         if route in self._ORG_SHARED_GET:
             return False
@@ -967,6 +1012,14 @@ class Handler(BaseHTTPRequestHandler):
             elif action == "set-role":
                 set_member_role(oid, (form.get("email") or "").strip().lower(),
                                 (form.get("role") or "").strip())
+            elif action == "desk-agent":
+                if not self._set_desk_grant(
+                        (form.get("mailbox") or "").strip().lower(),
+                        (form.get("agent") or "").strip(),
+                        (form.get("enabled") or "").strip() == "1"):
+                    return self._redirect(
+                        "/members/globus/admin?msg="
+                        + quote("Could not change that desk agent."))
             else:
                 return self._org_404()
             return self._redirect("/members/globus/admin?msg=" + quote("Saved."))

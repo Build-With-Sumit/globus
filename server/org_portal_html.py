@@ -306,11 +306,16 @@ def _org_audience_label(g):
     return "Person: " + esc(g.get("audience_value") or "")
 
 
-def org_admin_html(org, email, members, grants, agent_options, message=""):
+def org_admin_html(org, email, members, grants, agent_options, message="",
+                   desk_html=""):
     """Org admin console (admins only): default-private sharing controls —
     grant/revoke agents to everyone / a team / a person, and set each member's
     team + role. `agent_options` = [(slug, name)]; `members` = rows with
-    email/role/department; `grants` = org_agent_grants rows."""
+    email/role/department; `grants` = org_agent_grants rows.
+
+    `desk_html` is the optional shared-inbox grant matrix from
+    org_desk_grants_html(); '' when no desks are configured, so an install that
+    does not use them sees no empty section."""
     name = _org_name(org)
     depts = sorted({(m.get("department") or "").strip() for m in members
                     if (m.get("department") or "").strip()})
@@ -390,9 +395,71 @@ def org_admin_html(org, email, members, grants, agent_options, message=""):
             "default. Grant an agent to a team or person below.</p>"
             "<h3>Grant an agent</h3>" + grant_form
             + "<h3>Current grants</h3>" + grants_tbl
+            + (desk_html or "")
             + "<h3 style=\"margin-top:2rem\">Team &amp; roles</h3>" + members_tbl
             + "</div></section>")
     return _org_page(org, name + " · Admin", body)
+
+
+def org_desk_grants_html(desks=None, agents=None):
+    """The shared-inbox On/Off matrix — one toggle per (desk, agent).
+
+    Pure: the caller resolves which agents are currently granted. Returns ''
+    when no desks are configured, so an install that does not use them sees no
+    empty section rather than a broken-looking one.
+
+      desks  = [{mailbox, product, owner, granted: [agent, ...]}]
+      agents = [(key, label)]
+
+    Each toggle is its own tiny form POSTing the DESIRED end state rather than
+    a 'flip it' action. A toggle that means "invert whatever is there" does the
+    wrong thing when two admins act at once, or when someone double-submits —
+    and the wrong thing here is switching an agent on over a mailbox nobody
+    meant to grant."""
+    desks = desks or []
+    agents = agents or []
+    if not desks:
+        return ""
+
+    rows = []
+    for d in desks:
+        granted = set(d.get("granted") or [])
+        cells = []
+        for key, label in agents:
+            on = key in granted
+            btn = ("<button class=\"btn\" type=\"submit\" style=\"padding:.15rem .6rem;"
+                   "font-size:.7rem;font-weight:700;"
+                   + ("color:#296A3D;background:#E0EEDE\">ON" if on
+                      else "color:#6b7280;background:#eef0f2\">off")
+                   + "</button>")
+            cells.append(
+                "<td style=\"padding:.4rem\">"
+                "<form method=\"post\" action=\"/members/globus/admin/desk-agent\" "
+                "style=\"margin:0\">"
+                "<input type=\"hidden\" name=\"mailbox\" value=\"" + esc(d.get("mailbox") or "") + "\">"
+                "<input type=\"hidden\" name=\"agent\" value=\"" + esc(key) + "\">"
+                "<input type=\"hidden\" name=\"enabled\" value=\""
+                + ("0" if on else "1") + "\">"
+                + btn + "</form></td>")
+        rows.append(
+            "<tr style=\"border-top:1px solid var(--border,#eee)\">"
+            "<td style=\"padding:.4rem;white-space:nowrap\"><strong>"
+            + esc(d.get("mailbox") or "") + "</strong><br>"
+            "<span class=\"muted small\">" + esc(d.get("product") or "")
+            + (" · " + esc(d.get("owner")) if d.get("owner") else "")
+            + "</span></td>" + "".join(cells) + "</tr>")
+
+    heads = "".join("<th style=\"padding:.3rem .4rem\">" + esc(lbl) + "</th>"
+                    for _, lbl in agents)
+    return ("<h3 style=\"margin-top:2rem\">Shared inboxes</h3>"
+            "<p class=\"muted small\">Every agent is off for every desk until it "
+            "is granted here. Agents draft; the desk owner reviews and sends. "
+            "Spam rescue is the one that moves mail, and only out of Spam.</p>"
+            "<div style=\"overflow-x:auto\"><table style=\"width:100%;"
+            "border-collapse:collapse;min-width:520px\"><thead>"
+            "<tr class=\"muted small\" style=\"text-align:left\">"
+            "<th style=\"padding:.3rem .4rem\">Desk</th>" + heads
+            + "</tr></thead><tbody>" + "".join(rows) + "</tbody></table></div>")
 
 
 # ── Legal pages, served pre-auth on the org host so the Google OAuth consent
