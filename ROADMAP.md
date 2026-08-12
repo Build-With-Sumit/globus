@@ -765,9 +765,23 @@ into a prompt, so an unbounded one is an unbounded prompt), and 48 behavioural
 tests. See `server/email_desks.py`, `server/desk_agents.py` and
 `scripts/desk_agents_run.py`.
 
-Not built yet: an admin UI for the grants (they are set from the CLI;
-`org_portal_html.org_desk_agents_html` renders the read-only view), and a digest
-that rolls desk activity up into one notification.
+✅ **Both v0.16 leftovers closed in v0.17:**
+
+- **Grants are now set from the admin console**, not only the CLI —
+  `org_desk_grants_html` renders an On/Off matrix inside `/members/globus/admin`.
+  Each toggle submits the DESIRED END STATE rather than "flip it", so a
+  double-submit or two admins acting at once cannot switch an agent on by
+  accident. The write path validates the mailbox against the CONFIGURED desks
+  rather than trusting the form: without that, an admin could post any address
+  and start the agents reading — and for the rescue agent, moving — a mailbox
+  nobody made a desk. The rendered page only ever offers real desks, but a page
+  is not an authorization boundary.
+- **`desk_agents_run.py digest`** rolls activity up into one heartbeat-gated
+  notification, leading with the drafts still waiting on a human, oldest first
+  (the one that has sat longest belongs to the customer who has waited longest).
+  It refuses to emit an all-clear when nothing is reporting — writing this
+  turned up a real bug in the first draft, which printed a green "no drafts
+  waiting" tick directly beneath the red "NOT REPORTING" warning.
 
 ## v0.17 (current) — Versioned schema migrations
 
@@ -802,6 +816,9 @@ not check, so the feature does nothing forever while every log line says it ran.
   else's.
 - ✅ 29 behavioural tests, including a statement splitter that does not cut on a
   semicolon inside a string, a backtick identifier, or a comment.
+
+v0.17 also closes the two things v0.16 shipped without — the desk-grant admin UI
+and the desk digest (see the v0.16 section above for both).
 
 Remaining: the Truth Layer's SQLite state is still unversioned.
 

@@ -718,8 +718,31 @@ Notes worth knowing before you turn these on:
   Read them; they are what the agent believes about that desk, and you can edit
   them by hand.
 
+Grants can also be set from the admin console at `/members/globus/admin`, which
+shows an On/Off matrix per desk once `DESK_OWNERS` or `DESK_MAILBOXES` resolves
+to something. The CLI and the console write the same table.
+
+One roll-up a day tells you what happened and what is still waiting:
+
+```bash
+DESK_DRYRUN=1 python3 scripts/desk_agents_run.py digest   # print, don't send
+python3 scripts/desk_agents_run.py digest
+```
+
+```cron
+0 3 * * *     cd /opt/globus && .venv/bin/python3 \
+    scripts/desk_agents_run.py digest \
+    >> /var/log/globus-desk-agents.log 2>&1
+```
+
+Set `DESK_TELEGRAM_MEMBER` + `DESK_TELEGRAM_CHAT_ID` to have it delivered;
+without them it prints to stdout, which cron captures to the log. The digest is
+heartbeat-gated: it will not tell you the queue is clear over agents that never
+ran, and it names the silent ones instead.
+
 ```bash
 python tests/test_desk_agents.py
+python tests/test_desk_grants_ui.py
 ```
 
 ## Upgrading
