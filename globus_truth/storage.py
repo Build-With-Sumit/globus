@@ -193,6 +193,15 @@ class TruthRepository:
         with self._lock, closing(self._connect()) as connection, connection:
             if self.database != ":memory:":
                 connection.execute("PRAGMA journal_mode = WAL")
+            # Is this database brand new? Ask BEFORE the CREATE script runs,
+            # because afterwards a fresh database and an existing one are
+            # indistinguishable — and they need opposite handling. A fresh one
+            # already has the latest shape and must simply be stamped; an
+            # existing one may be several versions behind and needs the steps.
+            fresh = not connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' "
+                "AND name='receipts' LIMIT 1"
+            ).fetchone()
             connection.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS receipts (
@@ -600,18 +609,79 @@ class TruthRepository:
                     END;
                 """
             )
-            columns = {
-                row["name"]
-                for row in connection.execute("PRAGMA table_info(verdicts)").fetchall()
-            }
-            if "fresh_until" not in columns:
-                connection.execute("ALTER TABLE verdicts ADD COLUMN fresh_until TEXT")
-            connection.execute(
-                """
-                CREATE INDEX IF NOT EXISTS idx_verdicts_freshness
-                    ON verdicts(verdict, fresh_until)
-                """
-            )
+            self._migrate(connection, fresh=fresh)
+
+    # ── Schema versioning ────────────────────────────────────────────────
+    # The MySQL side of Globus versions its schema with files and a ledger
+    # table (see scripts/migrate.py). This store is different in two ways that
+    # justify a different mechanism rather than the same one:
+    #
+    #   * it is EMBEDDED — created and owned by this library, not administered
+    #     by an operator, so a step belongs in code that ships with the library
+    #     rather than in a file someone has to remember to run;
+    #   * SQLite gives us `PRAGMA user_version`, an integer living inside the
+    #     database file itself. No ledger table to create, and it cannot drift
+    #     away from the data it describes.
+    #
+    # And one difference that genuinely matters: SQLite DDL IS TRANSACTIONAL.
+    # Unlike the MySQL runner, which can only stop at a half-applied file and
+    # tell you where, each step here is atomic — a failure rolls back and the
+    # version does not move. Write each step to be a single transaction.
+
+    SCHEMA_VERSION = 1
+
+    # (version, description, statements). Append only; never edit a shipped
+    # step, because every database that already ran it keeps the old shape.
+    _MIGRATIONS: tuple[tuple[int, str, tuple[str, ...]], ...] = (
+        (
+            1,
+            "verdicts.fresh_until + the freshness index",
+            (
+                "ALTER TABLE verdicts ADD COLUMN fresh_until TEXT",
+                "CREATE INDEX IF NOT EXISTS idx_verdicts_freshness"
+                " ON verdicts(verdict, fresh_until)",
+            ),
+        ),
+    )
+
+    def _migrate(self, connection: sqlite3.Connection, *, fresh: bool) -> None:
+        """Bring an existing database up to SCHEMA_VERSION.
+
+        A FRESH database is stamped, not migrated: the CREATE script above
+        already produces the current shape, so replaying steps over it would at
+        best be a no-op and at worst fail on a column that is already there.
+
+        An existing database at version 0 predates versioning. It is not
+        assumed to be current — the steps run — which is why step 1 is written
+        defensively: it supersedes an ad-hoc `PRAGMA table_info` patch that used
+        to run inline on every connect, and there is no way to know which
+        databases already received it.
+        """
+        current = int(connection.execute("PRAGMA user_version").fetchone()[0] or 0)
+        if fresh:
+            connection.execute(f"PRAGMA user_version = {int(self.SCHEMA_VERSION)}")
+            return
+        if current >= self.SCHEMA_VERSION:
+            return
+        for version, _description, statements in self._MIGRATIONS:
+            if version <= current:
+                continue
+            for statement in statements:
+                try:
+                    connection.execute(statement)
+                except sqlite3.OperationalError as exc:
+                    # "duplicate column name" is the one benign case: this
+                    # database received the change through the old inline patch
+                    # before steps were recorded. Anything else is a real
+                    # failure and must not be swallowed into a version bump.
+                    if "duplicate column name" not in str(exc).lower():
+                        raise
+            connection.execute(f"PRAGMA user_version = {int(version)}")
+
+    def schema_version(self) -> int:
+        """The version this database is actually at — for tests and support."""
+        with self._lock, closing(self._connect()) as connection:
+            return int(connection.execute("PRAGMA user_version").fetchone()[0] or 0)
 
     @staticmethod
     def _validate_action_decision(
