@@ -293,7 +293,14 @@ Globus is opinionated. Bring your own:
 
 ## Status
 
-- **v0.15 (current)** — text + voice chat, vault from any combo of
+- **v0.16 (current)** — **shared inboxes**. Four opt-in, draft-first agents for
+  mailboxes owned by your STAFF rather than by you (support@, sales@, billing@):
+  rescue business mail wrongly filed as spam, draft replies to people who are
+  waiting, nudge threads that went quiet, and learn from the edits the human
+  made before sending. Every agent is off for every desk until it is granted.
+  Nothing sends. See `server/desk_agents.py` and
+  [ROADMAP.md](ROADMAP.md#v016-current--shared-inboxes-desk-agents).
+- **v0.15** — text + voice chat, vault from any combo of
   Obsidian zip / Google Drive / Gmail / WhatsApp Web / Microsoft Teams
   (the last two via a Chrome extension bridge), **plus a working agents
   subsystem**: 4 built-in agents (Research, Sales Desk, Narada, and Infra Watch)

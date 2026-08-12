@@ -648,6 +648,80 @@ Notes worth knowing before you trust the numbers:
 python tests/test_opportunity_tracker.py
 ```
 
+## 14. (optional) Enable the shared-inbox desk agents
+
+Section 11 covers YOUR mailboxes. This covers shared inboxes owned by your
+staff — `support@`, `sales@`, `billing@`. Each desk owner connects their own
+mailbox at `/members/connect` in the normal way; the agents then work each desk
+under that owner's own grant and leave drafts in that desk's Drafts.
+
+Their mailbox grant must allow composing drafts — `gmail.compose` or
+`gmail.modify`. **`gmail.send` alone is not enough**, and the spam rescue
+additionally needs `gmail.modify` to move a message. If a desk was connected for
+sending before you decided to use drafts, it needs re-consenting: a capability
+check is only valid against the requirement that existed when it was run.
+
+```bash
+# who owns the desks — every mailbox these people connect becomes a desk.
+DESK_OWNERS=staff-a@example.com,staff-b@example.com
+# desk domain -> product name, so replies sign off correctly per desk
+DESK_PRODUCTS={"acme.example":"Acme","widgets.example":"Widgets"}
+# what the desks are, and the ONLY facts a drafted reply may state
+DESK_BUSINESS_CONTEXT=Support and sales for Acme, a scheduling tool for clinics.
+DESK_PLAYBOOK=Plans: Solo $19/mo, Team $49/mo. 14-day trial, no card. Onboarding calls Tue/Thu. We do not offer perpetual licences.
+```
+
+See what resolved, then grant one agent on one desk and watch it before you
+widen. **Nothing runs until it is granted** — discovery is live, so a default of
+on would start working mailboxes the moment an unrelated account is connected:
+
+```bash
+python3 scripts/desk_agents_run.py desks
+
+python3 scripts/desk_agents_run.py grant support@acme.example responder on
+DESK_DRYRUN=1 python3 scripts/desk_agents_run.py respond support@acme.example
+python3 scripts/desk_agents_run.py respond support@acme.example
+```
+
+```cron
+5,35 * * * *  cd /opt/globus && flock -n /tmp/desk-rescue.lock \
+    .venv/bin/python3 scripts/desk_agents_run.py rescue \
+    >> /var/log/globus-desk-agents.log 2>&1
+15,45 * * * * cd /opt/globus && flock -n /tmp/desk-respond.lock \
+    .venv/bin/python3 scripts/desk_agents_run.py respond \
+    >> /var/log/globus-desk-agents.log 2>&1
+20 4 * * *    cd /opt/globus && flock -n /tmp/desk-followup.lock \
+    .venv/bin/python3 scripts/desk_agents_run.py followup \
+    >> /var/log/globus-desk-agents.log 2>&1
+40 21 * * *   cd /opt/globus && flock -n /tmp/desk-learn.lock \
+    .venv/bin/python3 scripts/desk_agents_run.py learn \
+    >> /var/log/globus-desk-agents.log 2>&1
+```
+
+Notes worth knowing before you turn these on:
+
+- **Leave `DESK_PLAYBOOK` empty and the composer will not state facts.** It is
+  told it has none and must ask instead. That is deliberate: an invented price
+  in a draft is worse than no draft at all, because a human skimming their
+  Drafts sends it and you are then committed to it.
+- **Start with `responder` on one desk.** The learning agent has nothing to
+  learn from until drafts exist and humans have edited some, so grant `learning`
+  a week later, not on day one.
+- **`rescue` is the only agent that changes a mailbox.** It moves mail
+  SPAM → INBOX and nothing else. It is biased to rescue on purpose: a wrong
+  rescue costs a second of attention, a wrong leave-in-spam loses a customer
+  silently.
+- **Run `desks` when something looks wrong.** It distinguishes "off",
+  "never ran" and "ran N hours ago" per agent per desk — a granted-but-broken
+  agent looks exactly like an ungranted one otherwise.
+- Lessons are markdown under `DESK_LESSONS_DIR`, one file per desk per agent.
+  Read them; they are what the agent believes about that desk, and you can edit
+  them by hand.
+
+```bash
+python tests/test_desk_agents.py
+```
+
 ## Upgrading
 
 ```bash

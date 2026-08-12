@@ -626,7 +626,7 @@ and a local, inspectable approval coordinator.
 - 📄 See [`globus_truth/README.md`](globus_truth/README.md) and
   [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
-## v0.15 (current) — Verified Action SDK + execution timeline
+## v0.15 — Verified Action SDK + execution timeline
 
 v0.15 makes destination verification a required stage for SDK-managed
 consequential actions. It extends the local Approval Center path without
@@ -705,6 +705,67 @@ This is a direction, not a claim of OpenClaw parity.
   budgets, traceable hand-offs, and Truth receipts at each consequential step.
 - [ ] Add encrypted secret management, audit export, retention controls, and
   deployment hardening before describing the platform as production-ready.
+
+## v0.16 (current) — Shared inboxes: desk agents
+
+Everything before this treats mail as the OPERATOR's own. v0.16 covers the other
+shape: shared inboxes ("desks") owned by members of staff, each needing the same
+automation, none of them belonging to the person who installed Globus.
+
+Four agents, all opt-in per desk, all draft-first:
+
+- ✅ **Spam rescue** — classifies the desk's Spam folder and moves genuine
+  business mail back to the Inbox. The only agent here that mutates a mailbox,
+  and the mutation is recoverable (the message can move back).
+- ✅ **Responder** — someone wrote in and is waiting; classifies the request and
+  drafts a reply grounded ONLY in the operator's playbook. With no playbook
+  configured the composer is told it has no facts and must ask rather than
+  answer — an invented price in a draft is worse than no draft, because a human
+  skimming their Drafts sends it and the business is then committed to it.
+- ✅ **Follow-up** — the inverse: we spoke last, they went quiet, a nudge is due.
+  A cheap relevance gate decides whether a thread deserves one at all, and it
+  fails CLOSED.
+- ✅ **Learning** — reads what the human actually DID with the above (the edits
+  they made before sending, the rescues they reversed) and writes a lesson each
+  agent reads back on its next run, as markdown the desk owner can hand-edit.
+
+The learning agent works BECAUSE the others draft. A human editing a draft
+before sending is the richest correction signal available — free, unprompted,
+and it shows the operator's real voice and policy rather than their stated one.
+An agent that sent directly would be both riskier and unable to learn: the
+safety property and the feedback channel are the same mechanism.
+
+Four invariants worth reading the code for, each of which cost something:
+
+- ✅ **A draft is never deleted once a human has sent it.** Sending one of our
+  drafts from the Gmail web UI leaves the draft id resolvable and re-pointed at
+  the SENT message, and `DELETE /drafts/<id>` is permanent — no Trash, no Sent,
+  no copy anywhere. `delete_draft_if_unsent()` re-reads the object first and
+  fails closed. The API send path does NOT reproduce the bug, so a positive
+  control driven through `drafts.send` clears the code; only a UI send exposes
+  it. An id you stored is a claim about the past, not a fact about the present.
+- ✅ **Ask for stale threads; do not fetch the newest and filter.** Taking the
+  most recent N sent threads and then keeping those past the staleness bar works
+  on a quiet desk and silently yields nothing on a busy one, forever, with no
+  error to notice. Querying `older_than:` makes a busier desk produce MORE
+  candidates rather than fewer.
+- ✅ **Only a send that POSTDATES a draft can be a human's edit of it.** Without
+  that bound a multi-turn thread diffs today's draft against an older outbound
+  turn and distils a confident, wrong lesson — which then feeds back into the
+  composer's prompt on every future run.
+- ✅ **Judge intent from THEIR messages only.** A gate that reads the whole
+  thread, including a nudge this agent already sent, re-justifies its own first
+  mistake on every subsequent run until it is permanent.
+
+Also: per-(desk, agent) grants that start OFF, per-(agent, desk) heartbeats so
+one healthy desk cannot mask a dead one, a bounded lesson store (it is read back
+into a prompt, so an unbounded one is an unbounded prompt), and 48 behavioural
+tests. See `server/email_desks.py`, `server/desk_agents.py` and
+`scripts/desk_agents_run.py`.
+
+Not built yet: an admin UI for the grants (they are set from the CLI;
+`org_portal_html.org_desk_agents_html` renders the read-only view), and a digest
+that rolls desk activity up into one notification.
 
 ## v1.0 — production-ready
 

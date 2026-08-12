@@ -114,6 +114,14 @@ agents_runtime  ◄─── (run_agent tool + agents dashboard)
 globus_agents_catalog ◄─── (agents UI + run_agent tool + exact grants)
 globus_agents_helpers ◄─── (agents UI + brief viewer)
 
+email_intel     ◄─── (the operator's OWN mailboxes: triage → reason → digest)
+   ▲
+   └── email_desks      (SHARED inboxes: desk discovery, grants, drafts, lessons)
+          ▲
+          └── desk_agents   (spam rescue · responder · follow-up · learning)
+                 ▲
+                 └── scripts/desk_agents_run.py   (cron entry point + grants CLI)
+
 agent_runner    ◄─── (OSS orchestrator + MySQL run row)
    │
    └── globus_truth.agent_adapter
