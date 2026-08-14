@@ -1084,6 +1084,38 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send_json(401, {"error": "sign in"})
                 return self._redirect("/members/login")
 
+        if route == "/api/globus/member-state":
+            # Per-member installation state. Deliberately NOT folded into
+            # /api/health?deep=1, which is unauthenticated for load-balancer
+            # probes — this names members and the accounts they connected.
+            # A member sees their OWN state; only the install owner sees anyone
+            # else's, and asking for someone else without being the owner 404s
+            # rather than 403s, matching the admin console: the existence of
+            # the roster is not something a regular member needs to learn.
+            import member_state as MS
+            from agents_runtime import _is_agents_owner
+            qs = parse_qs(parsed.query)
+            want_all = bool((qs.get("all") or [""])[0])
+            target = ((qs.get("email") or [""])[0] or "").strip().lower()
+            owner = _is_agents_owner(email)
+            if (want_all or (target and target != (email or "").lower())):
+                if not owner:
+                    return self._send_json(404, {"error": "not found"})
+            try:
+                if want_all:
+                    body = {"members": MS.roster()}
+                else:
+                    state = MS.member_state(target or email,
+                                            partial=False)
+                    body = dict(state, blockers=MS.blockers(state))
+            except MS.StateUnavailable as e:
+                # 503, never a cheerful empty answer. This is a health surface;
+                # reporting "nothing connected" because the database is down is
+                # the one failure it must never produce.
+                return self._send_json(503, {"error": "state unavailable",
+                                             "detail": str(e)[:200]})
+            return self._send_json(200, body)
+
         if route == "/members":
             return self._send_html(200, _members_landing(email))
 
