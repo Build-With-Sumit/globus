@@ -745,6 +745,47 @@ python tests/test_desk_agents.py
 python tests/test_desk_grants_ui.py
 ```
 
+## 15. Checking it actually works for each member
+
+`scripts/check_install.py` validates YOUR install. This answers the other
+question — is it working for each *person*:
+
+```bash
+python3 scripts/member_state_report.py                 # every active member
+python3 scripts/member_state_report.py you@example.com  # one member
+python3 scripts/member_state_report.py --json           # for monitoring
+```
+
+It exits **1 when something is waiting on you**, so it works as a cron check.
+
+The stages are deliberately not booleans:
+
+| Stage | Means | Whose move |
+|---|---|---|
+| `ready` | data arrived and was processed | — |
+| `ingesting` | data arrived, vault still building | wait |
+| `connected` | connected, nothing through yet | wait |
+| `not_connected` | available here, member hasn't wired it | **member** |
+| `unavailable` | implemented, but not configured on this install | **you** |
+| `error` | connected and failing | **member** (usually a reconnect) |
+| `unknown` | could not be checked — never shown as a zero | **you** |
+
+**`unavailable` is the one to read carefully.** It means the capability exists
+in the code but this deployment never got the credential for it. If you see
+members listed as not having connected Drive, check this first — telling someone
+to connect a source your install cannot offer wastes their time and yours.
+
+The same data is available over HTTP at `GET /api/globus/member-state`
+(`?email=` or `?all=1` for the install owner). It is **not** part of
+`/api/health?deep=1`, which stays unauthenticated for load balancers — this
+endpoint names members and the accounts they connected, so it requires a
+session, and a member can only ever see their own.
+
+```bash
+python tests/test_member_state.py
+python tests/test_member_state_http.py
+```
+
 ## Upgrading
 
 ```bash

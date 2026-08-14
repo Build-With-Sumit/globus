@@ -187,7 +187,7 @@ python scripts/test_all.py
 ```
 
 The release gate passes all **171 Truth/Mission Control tests** and all
-**14 repository-wide check groups** (`python3 scripts/test_all.py`).
+**16 repository-wide check groups** (`python3 scripts/test_all.py`).
 
 For a camera-friendly explanation of what we built—including the exact Codex
 and GPT-5.6 contribution, a reel script, a longer YouTube script, screen cues,
@@ -293,7 +293,13 @@ Globus is opinionated. Bring your own:
 
 ## Status
 
-- **v0.17 (current)** — **versioned schema migrations**. Numbered, checksummed
+- **v0.18 (current)** — **per-member installation state**. Answers "is it
+  actually working for this person?" without collapsing four different answers
+  into one: implemented / available on this install / connected by the member /
+  actually working. `scripts/member_state_report.py` for operators, plus an
+  owner-gated `GET /api/globus/member-state`. A capability the operator never
+  configured reads as `unavailable`, not as "the member didn't connect it".
+- **v0.17** — **versioned schema migrations**. Numbered, checksummed
   steps under `schema/migrations/`, a `schema_migrations` ledger, and
   `scripts/migrate.py status|up|baseline`. Upgrading is no longer "re-run the
   .sql and hope"; see [INSTALL.md](INSTALL.md#upgrading).

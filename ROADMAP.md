@@ -674,8 +674,10 @@ This is a direction, not a claim of OpenClaw parity.
 
 - [ ] Extend typed, deny-by-default grants beyond the four built-in background
   agents without presenting inventory-only capabilities as governed.
-- [ ] Add per-member installation state and health checks, while keeping
-  “implemented” separate from “connected.”
+- [x] ✅ Add per-member installation state and health checks, while keeping
+  “implemented” separate from “connected.” **Shipped in v0.18** —
+  `server/member_state.py`, `GET /api/globus/member-state`, and
+  `scripts/member_state_report.py`.
 - [ ] Apply the Consequence Firewall to one reversible real-provider workflow
   with provider idempotency keys, destination acknowledgement/read-back,
   reconciliation, and audit export.
@@ -783,7 +785,54 @@ tests. See `server/email_desks.py`, `server/desk_agents.py` and
   turned up a real bug in the first draft, which printed a green "no drafts
   waiting" tick directly beneath the red "NOT REPORTING" warning.
 
-## v0.17 (current) — Versioned schema migrations
+## v0.18 (current) — Per-member installation state
+
+"Is it actually working for this person?" is the question an operator asks
+repeatedly, and it has four different answers hiding inside it. Collapsing them
+into a boolean is how support time gets burned:
+
+  **IMPLEMENTED** the code ships it · **AVAILABLE** this install has it
+  configured · **CONNECTED** the member wired their own account to it ·
+  **WORKING** data has arrived and been processed
+
+A capability can be implemented-and-unavailable (the operator never set up
+Google OAuth), available-and-unconnected, connected-and-broken (the refresh
+token was revoked on Tuesday), or connected-and-simply-empty. Those need
+different actions, and **most of them are not the member's fault**.
+
+- ✅ **`server/member_state.py`** — seven stages, never a bare boolean:
+  `ready · ingesting · connected · not_connected · unavailable · error ·
+  unknown`, across Drive, Gmail, the three bridges, the vault, the digest and
+  agents.
+- ✅ **`unavailable` is the distinction that does the most work.** Reporting
+  "hasn't connected Drive" on an install with no Google client configured blames
+  a member for the operator's omission and sends them to a button that cannot
+  work. `install_capabilities()` reads that line from CONFIG, not from the
+  member's rows, and `blockers()` attributes every gap to **operator** or
+  **member** so a roster is actionable rather than just long.
+- ✅ **A zero is never manufactured from a failed read.** `db_read` returns
+  `None` on failure and empty on success, and the idiomatic `or []` merges them
+  — so with the database down, every member would be confidently reported as
+  brand new with nothing connected. That is the one output a health surface must
+  never produce. `_rows()` raises; `partial=True` degrades to `unknown`, which
+  renders as "could not check" and never as a zero.
+- ✅ **Connected ≠ working.** A revoked connection is `error` even though it once
+  synced 99 files. A vault 40% built stays `ingesting`, because it answers
+  confidently from the part it has — which is exactly when a member concludes
+  the assistant does not know things it in fact holds. A digest row under 200
+  chars is `error`, that being the shape of a model's fluent refusal persisted
+  as a member's brain.
+- ✅ **`GET /api/globus/member-state`**, deliberately NOT folded into
+  `/api/health?deep=1`, which is unauthenticated for load-balancer probes. This
+  names members and their connected accounts: signed out is 401, a member sees
+  only their own, and asking for anyone else 404s rather than 403s — the
+  existence of a roster is not something a regular member needs to learn. An
+  unreadable database is 503, never a cheerful empty answer.
+- ✅ **`scripts/member_state_report.py`** for operators, exiting 1 when
+  something is waiting on THEM. 43 tests (29 logic + 14 end-to-end over a real
+  socket).
+
+## v0.17 — Versioned schema migrations
 
 Until now the schema was one big `CREATE TABLE IF NOT EXISTS` bootstrap, and
 nothing recorded what any given database had actually received. That fails
