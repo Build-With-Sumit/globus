@@ -127,7 +127,9 @@ class ApolloLeadSource:
         if icp.raw:
             body.update(icp.raw)
 
-        resp = _post(member_email, "/v1/mixed_people/search", body)
+        # Apollo deprecated /v1/mixed_people/search for API callers (HTTP 422);
+        # the current people-search endpoint is /v1/mixed_people/api_search.
+        resp = _post(member_email, "/v1/mixed_people/api_search", body)
         if "error" in resp:
             print(f"[narada/apollo] search failed: {resp['error']}",
                   flush=True)
