@@ -745,7 +745,45 @@ python tests/test_desk_agents.py
 python tests/test_desk_grants_ui.py
 ```
 
-## 15. Checking it actually works for each member
+## 15. (optional) Let other services send Telegram alerts through Globus
+
+Globus can double as a small Telegram gateway. A monitoring tool, a CRM or a cron
+job POSTs a finished message to `/api/notify` with its own key, and Globus sends it
+through a member's Telegram bot. Nothing is on until you mint a key: a fresh
+install answers `401` to every call.
+
+1. The member needs an active Telegram bot (Members > Telegram bot) with the target
+   chat in the bot's `allowed_send_chats`. That list is the final gate: a key can
+   never reach a chat the bot does not already allow.
+2. Apply the migration if you installed before this feature:
+   `python3 scripts/migrate.py up`.
+3. Mint a key for one service and one member, optionally pinned to chats and an
+   expiry:
+
+   ```bash
+   python3 scripts/relay_key.py create monitoring ops@example.com --chat -1001234567890
+   ```
+
+   It prints the key once (`sk-relay-` plus 48 hex). Only its SHA-256 is stored, so
+   hand it to the service out-of-band; a lost key is revoked and replaced.
+4. The service sends (the key from step 3 is in `$RELAY_KEY`):
+
+   ```bash
+   curl -X POST https://globus.example.com/api/notify \
+     -H "Authorization: Bearer $RELAY_KEY" -H "Content-Type: application/json" \
+     -d '{"chat_id": -1001234567890, "text": "Disk at 91% on db-1"}'
+   ```
+
+   `X-Relay-Key: <key>` works in place of the Bearer header. Optional field:
+   `parse_mode`. Replies: `200` sent, `401` bad or expired key, `403` chat outside
+   the key's scope, `413` text over 4096 characters, `429` over 60 messages a minute
+   per key, `502` Telegram or the bot's allow-list refused it (the body says why).
+5. `relay_key.py list` shows keys and when each was last used;
+   `relay_key.py revoke --id N` (or `--service name`) turns one off. Every send,
+   and every denial by the bot's allow-list, is recorded in
+   `globus_telegram_bot_sends`.
+
+## 16. Checking it actually works for each member
 
 `scripts/check_install.py` validates YOUR install. This answers the other
 question — is it working for each *person*:
