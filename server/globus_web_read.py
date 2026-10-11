@@ -32,9 +32,11 @@ pure, no LLM / DB imports, callable from any agent script.
 """
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import re
+import socket
 import urllib.request
 import urllib.parse
 from html import unescape
@@ -57,9 +59,11 @@ def _get(url: str, headers: dict | None = None,
     h = {"User-Agent": _UA, "Accept": "*/*"}
     if headers:
         h.update(headers)
+    if not url_is_public_http(url):
+        return 0, _PUBLIC_URL_ERR.encode("utf-8")
     req = urllib.request.Request(url, headers=h)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with _safe_opener().open(req, timeout=timeout) as r:
             return r.status, r.read()
     except urllib.error.HTTPError as e:
         try:
@@ -84,6 +88,92 @@ def _ok(source: str, url: str, *, title: str = "", body: str = "",
 def _err(source: str, url: str, error: str) -> dict:
     return {"source": source, "url": url, "title": "", "body": "",
             "author": "", "ts": "", "meta": {}, "ok": False, "error": error}
+
+
+# ------------------------------------------------------------------
+# URL SAFETY -- one validator, in front of every reader and renderer.
+#
+# This module renders caller-supplied URLs in headless chromium and is
+# reachable from the Globus chat tool loop: from any paying member, and
+# from text sitting inside a member's own documents. So the scheme AND
+# the destination address are checked here, once.
+#
+# The defect this closes: read_web() RETURNED an error dict for a
+# non-http scheme instead of raising; web_read() read that as "the keyless
+# path failed" and handed the same unvalidated URL to chromium, which
+# rendered a file:// URL (for example the deployment's .env) and returned
+# its contents as page text. A validator that only one of several paths
+# consults is not a validator -- which is why this check is repeated as a
+# hard precondition inside both render functions instead of being trusted
+# to callers.
+# ------------------------------------------------------------------
+_PUBLIC_URL_ERR = "url must be a public http(s) address"
+
+
+def _scheme_is_http(u: str) -> bool:
+    # Case-INsensitive on purpose: "FILE://" must not slip past a test
+    # that only knows the lowercase spelling.
+    return str(u).strip().lower().startswith(("http://", "https://"))
+
+
+def url_is_public_http(u: str) -> bool:
+    """True only for an http(s) URL whose host resolves entirely to
+    public addresses.
+
+    Fails CLOSED: an unparseable URL, a host that will not resolve, or an
+    address we cannot classify is refused. Blocking loopback and
+    link-local is not theoretical -- an LLM proxy or admin service often
+    listens on loopback with no auth, and cloud instance metadata at
+    169.254.169.254 hands credentials to anything that can GET it.
+
+    Known residual: this lookup and the one urllib performs when it
+    connects are separate, so a DNS-rebinding attacker has a window.
+    Closing that needs connect-by-pinned-IP with an explicit Host header.
+    It is a far smaller hole than the one this closes.
+    """
+    if not _scheme_is_http(u):
+        return False
+    try:
+        host = urllib.parse.urlsplit(str(u).strip()).hostname
+    except Exception:
+        return False
+    if not host:
+        return False
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except Exception:
+        return False
+    if not infos:
+        return False
+    for info in infos:
+        try:
+            addr = ipaddress.ip_address(str(info[4][0]).split("%", 1)[0])
+        except ValueError:
+            return False
+        if (addr.is_private or addr.is_loopback or addr.is_link_local
+                or addr.is_reserved or addr.is_multicast
+                or addr.is_unspecified):
+            return False
+    return True
+
+
+class _NoPrivateRedirect(urllib.request.HTTPRedirectHandler):
+    """Re-validate every redirect hop.
+
+    A pre-flight check on the URL the caller typed is worth little on its
+    own: an attacker-controlled PUBLIC host can answer 302 and send us
+    straight to 127.0.0.1 or to the metadata service.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if not url_is_public_http(newurl):
+            return None     # stop; urllib surfaces this as an HTTPError
+        return super().redirect_request(
+            req, fp, code, msg, headers, newurl)
+
+
+def _safe_opener() -> urllib.request.OpenerDirector:
+    return urllib.request.build_opener(_NoPrivateRedirect())
 
 
 # ------------------------------------------------------------------
@@ -547,6 +637,11 @@ def _render_with_playwright(url: str, timeout: int = 30) -> dict | None:
     """Render `url` in headless chromium via a bounded subprocess. Returns
     {title, text, final_url} or None. The hard subprocess timeout guarantees
     the caller (chat loop / agent) is never blocked longer than `timeout`."""
+    # Hard precondition, not a courtesy: this function turns a string
+    # into a real browser navigation, so it refuses on its own account
+    # rather than trusting that every caller checked first.
+    if not url_is_public_http(url):
+        return None
     if not _playwright_available():
         return None
     import subprocess
@@ -608,6 +703,11 @@ def web_read(url: str) -> dict:
     falls back to a headless-chromium render (bounded subprocess)."""
     u = str(url).strip()
     source = _detect_source(u)
+    # Before any reader AND before the chromium fallback -- that
+    # fallback is what made a returned-not-raised scheme error
+    # exploitable in the first place.
+    if not url_is_public_http(u):
+        return _err(source, u, _PUBLIC_URL_ERR)
     try:
         if source == "twitter":
             result = read_tweet(url)
@@ -642,6 +742,11 @@ __all__ = ["web_read", "read_tweet", "read_reddit", "read_youtube",
 # globus_web_read` stays dependency-free.
 # ------------------------------------------------------------------
 def _render_main(url: str) -> None:
+    # Independently guarded: this runs as its own process and must not
+    # rely on the parent having validated anything.
+    if not url_is_public_http(url):
+        print(json.dumps({"ok": False, "error": _PUBLIC_URL_ERR}))
+        return
     try:
         from playwright.sync_api import sync_playwright
     except Exception as e:
