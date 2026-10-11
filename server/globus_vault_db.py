@@ -47,6 +47,14 @@ GLOBUS_VAULT_MAX_CHARS = 200_000   # cap stored vault content
 GLOBUS_PER_SOURCE_CAP = 200_000    # max chars from one source going into system prompt
 GLOBUS_TOTAL_VAULT_CAP = 500_000   # ~125K tokens; leaves headroom for persona + history in 200K context
 
+# Reserved "member" key for the SHARED COMPANY VAULT (Phase 3). Content ingested
+# under this email is company-wide knowledge every staff member's Globus can
+# search + gets folded into every member's context. It is NOT a real member:
+# the `__` sentinel can never be a valid login/email (EMAIL_RE requires an @),
+# so it can't be connected, logged into, or listed as a member — it only ever
+# appears by being explicitly unioned into the per-member search/context path.
+GLOBUS_COMPANY_VAULT_EMAIL = "__company__"
+
 
 def globus_extract_md_from_zip(zip_bytes, max_chars=GLOBUS_VAULT_MAX_CHARS):
     """Extract all .md files from a zip; return (concatenated_markdown, file_count, total_chars)."""
@@ -164,6 +172,60 @@ def _globus_live_overlay(email):
     return "".join(parts).strip()
 
 
+def _globus_company_block():
+    """Shared COMPANY VAULT context (Phase 3) — company-wide knowledge folded
+    into EVERY member's context so all staff share it. Prefers the company
+    digest (globus_intelligence under GLOBUS_COMPANY_VAULT_EMAIL); if that
+    hasn't been synthesized yet, falls back to a capped raw aggregation of the
+    company sources. Also folds in the company overlay (product-*/GA/etc.).
+    Returns "" when the company vault is empty. Never includes any member's
+    private data — it reads ONLY the reserved company key."""
+    body_parts = []
+    intel = globus_get_intelligence(GLOBUS_COMPANY_VAULT_EMAIL)
+    if intel and (intel.get("content") or "").strip():
+        body_parts.append(intel["content"][:GLOBUS_TOTAL_VAULT_CAP])
+    else:
+        total = 0
+        for r in (globus_get_sources(GLOBUS_COMPANY_VAULT_EMAIL) or []):
+            block = (r["content"] or "")[:GLOBUS_PER_SOURCE_CAP]
+            if not block.strip():
+                continue
+            if total + len(block) > GLOBUS_TOTAL_VAULT_CAP:
+                break
+            body_parts.append(block)
+            total += len(block)
+    overlay = _globus_live_overlay(GLOBUS_COMPANY_VAULT_EMAIL)
+    if overlay:
+        body_parts.append(overlay)
+    body = "\n\n".join(p for p in body_parts if p and p.strip()).strip()
+    if not body:
+        return ""
+    return ("\n\n===== COMPANY KNOWLEDGE (shared vault — same for every staff "
+            "member; not private to this user) =====\n\n" + body)
+
+
+def _company_vault_result(company_block):
+    """Shape a vault result carrying ONLY the shared company block — used when a
+    member has no personal vault yet but still shares the company vault."""
+    return {
+        "content": company_block.strip(),
+        "char_count": len(company_block),
+        "file_count": 0,
+        "source_count": 1,
+        "sources_used": [{
+            "id": 0,
+            "source_type": "company-vault",
+            "source_identifier": GLOBUS_COMPANY_VAULT_EMAIL,
+            "source_label": "Company knowledge (shared vault)",
+            "char_count": len(company_block),
+            "file_count": None,
+            "updated_at": None,
+        }],
+        "uploaded_at": None,
+        "from_digest": False,
+    }
+
+
 def globus_get_vault(email):
     """Combined context for sending to Claude as system-prompt material.
 
@@ -180,12 +242,19 @@ def globus_get_vault(email):
     transitively touches. All digestion happens offline by design — see
     `scripts/build_intelligence.py`.
     """
+    # Shared company vault (Phase 3): folded into every REAL member's context.
+    # Never added when building context for the company key itself.
+    company_block = ("" if email == GLOBUS_COMPANY_VAULT_EMAIL
+                     else _globus_company_block())
+
     intel = globus_get_intelligence(email)
     if intel and (intel.get("content") or "").strip():
         content = intel["content"]
         overlay = _globus_live_overlay(email)
         if overlay:
             content = content + "\n\n" + overlay
+        if company_block:
+            content = content + company_block
         sources_used = [{
             "id": 0,
             "source_type": "intelligence-digest",
@@ -201,14 +270,16 @@ def globus_get_vault(email):
             "content": content,
             "char_count": len(content),
             "file_count": 0,
-            "source_count": len(sources_used) + (1 if overlay else 0),
+            "source_count": (len(sources_used) + (1 if overlay else 0)
+                             + (1 if company_block else 0)),
             "sources_used": sources_used,
             "uploaded_at": intel.get("updated_at"),
             "from_digest": True,
         }
     rows = globus_get_sources(email)
     if not rows:
-        return None
+        # No personal vault yet — but the member still shares the company vault.
+        return _company_vault_result(company_block) if company_block else None
     parts = []
     total = 0
     sources_used = []
@@ -233,12 +304,15 @@ def globus_get_vault(email):
             "updated_at": r.get("updated_at"),
         })
     if not parts:
-        return None
+        return _company_vault_result(company_block) if company_block else None
+    content = "".join(parts).strip()
+    if company_block:
+        content = content + company_block
     return {
-        "content": "".join(parts).strip(),
-        "char_count": total,
+        "content": content,
+        "char_count": len(content),
         "file_count": sum((r.get("file_count") or 0) for r in rows),
-        "source_count": len(sources_used),
+        "source_count": len(sources_used) + (1 if company_block else 0),
         "sources_used": sources_used,
         # Keep "uploaded_at" key so the existing chat-html template doesn't break
         "uploaded_at": rows[0].get("updated_at"),

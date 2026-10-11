@@ -27,6 +27,10 @@ from __future__ import annotations
 import os
 import re
 from db_helpers import db_read
+# Reserved key for the shared company vault (Phase 3). Every per-member search
+# also covers this namespace, so all staff share the company knowledge while
+# staying isolated from each OTHER (the union only ever adds the company key).
+from globus_vault_db import GLOBUS_COMPANY_VAULT_EMAIL
 
 
 # Constant ------------------------------------------------------------------
@@ -68,10 +72,10 @@ def globus_search_files(email, query, limit=5):
         # Single token / empty — substring match as before.
         q = f"%{raw_q}%"
         rows = db_read(
-            "SELECT id, filename, mime_type, modified_at, extracted_chars, "
+            "SELECT id, email, filename, mime_type, modified_at, extracted_chars, "
             "       extracted, source_type "
             "FROM globus_vault_files "
-            "WHERE email=%s AND filename LIKE %s "
+            "WHERE email IN (%s, %s) AND filename LIKE %s "
             "ORDER BY extracted DESC, "
             "  CASE WHEN mime_type IN ("
             "    'application/vnd.google-apps.spreadsheet', "
@@ -81,7 +85,7 @@ def globus_search_files(email, query, limit=5):
             "  extracted_chars DESC, "
             "  modified_at DESC "
             "LIMIT %s",
-            (email, q, limit))
+            (email, GLOBUS_COMPANY_VAULT_EMAIL, q, limit))
     else:
         # Multi-token OR with hit-count ranking.
         like_parts = " OR ".join(["filename LIKE %s"] * len(uniq_tokens))
@@ -90,10 +94,10 @@ def globus_search_files(email, query, limit=5):
             * len(uniq_tokens))
         like_args = [f"%{t}%" for t in uniq_tokens]
         sql = (
-            "SELECT id, filename, mime_type, modified_at, extracted_chars, "
+            "SELECT id, email, filename, mime_type, modified_at, extracted_chars, "
             "       extracted, source_type "
             "FROM globus_vault_files "
-            f"WHERE email=%s AND ({like_parts}) "
+            f"WHERE email IN (%s, %s) AND ({like_parts}) "
             "ORDER BY extracted DESC, "
             f"  ({rank_parts}) DESC, "
             "  CASE WHEN mime_type IN ("
@@ -104,14 +108,18 @@ def globus_search_files(email, query, limit=5):
             "  extracted_chars DESC, "
             "  modified_at DESC "
             "LIMIT %s")
-        rows = db_read(sql, ([email] + like_args + like_args + [limit]))
+        rows = db_read(sql,
+                       ([email, GLOBUS_COMPANY_VAULT_EMAIL]
+                        + like_args + like_args + [limit]))
     out = []
     for r in (rows or []):
+        is_company = r.get("email") == GLOBUS_COMPANY_VAULT_EMAIL
         out.append({
             "file_id":      r["id"],
             "filename":     r["filename"],
             "mime_type":    r["mime_type"],
             "source":       r["source_type"],
+            "scope":        "company" if is_company else "personal",
             "modified_at":  str(r["modified_at"]) if r["modified_at"] else None,
             "char_count":   int(r["extracted_chars"] or 0),
             "has_content":  bool(r["extracted"]),
@@ -138,10 +146,10 @@ def globus_search_content(email, query, limit=5):
     except (TypeError, ValueError):
         limit = 5
     rows = db_read(
-        "SELECT id, filename, mime_type, modified_at, extracted_chars, "
+        "SELECT id, email, filename, mime_type, modified_at, extracted_chars, "
         "       extracted_path "
         "FROM globus_vault_files "
-        "WHERE email=%s AND extracted=1 AND extracted_path IS NOT NULL "
+        "WHERE email IN (%s, %s) AND extracted=1 AND extracted_path IS NOT NULL "
         "ORDER BY "
         "  CASE WHEN mime_type IN ("
         "    'application/vnd.google-apps.spreadsheet', "
@@ -150,7 +158,7 @@ def globus_search_content(email, query, limit=5):
         "  ELSE 1 END, "
         "  modified_at DESC "
         "LIMIT 500",
-        (email,))
+        (email, GLOBUS_COMPANY_VAULT_EMAIL))
     q_lower = q.lower()
     out = []
     scanned = 0
@@ -178,6 +186,8 @@ def globus_search_content(email, query, limit=5):
             "file_id":     r["id"],
             "filename":    r["filename"],
             "mime_type":   r["mime_type"],
+            "scope":       ("company" if r.get("email") == GLOBUS_COMPANY_VAULT_EMAIL
+                            else "personal"),
             "modified_at": str(r["modified_at"]) if r["modified_at"] else None,
             "char_count":  int(r["extracted_chars"] or 0),
             "snippet":     "..." + snippet + "...",
