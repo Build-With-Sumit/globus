@@ -9,15 +9,14 @@ Functions:
     response shape (non-streaming).
   - voice_llm_sse_chunks():   emit OpenAI streaming SSE chunks.
 
-⚠️ DEEPSEEK MODEL — 2026-07-24 deprecation, NOT a trivial rename:
-   `deepseek-chat` is being deprecated 2026-07-24 15:59 UTC. The
-   replacements DeepSeek currently exposes (`deepseek-v4-flash`,
-   `deepseek-v4-pro`) are REASONING-ONLY models: all output lands in
-   `reasoning_content` and `content` stays empty. Tested 2026-06-28 with
-   reasoning_effort=none / thinking=false / enable_thinking=false /
-   thinking_budget=0 — none turn off thinking. So `model:` here can't
-   just flip to v4-flash without also parsing reasoning_content into the
-   reply (or switching providers). Decision deferred — see TODO.md.
+DEEPSEEK BACKUP MODEL (repointed 2026-06-30): `deepseek-chat` retires
+   2026-07-24 15:59 UTC, so this targets `deepseek-v4-flash` (env
+   DEEPSEEK_MODEL). V4 is REASONING-ONLY — the answer lands in
+   `reasoning_content` with `content` empty — so both functions below fall
+   back to reasoning_content when content is blank. The output is the
+   model's raw thinking (degraded), acceptable for a tertiary backup. The
+   live voice brain is Claude (globus_voice_llm_call default);
+   these run only when GLOBUS_VOICE_PROVIDER=deepseek.
 
 Module config injected at startup via configure(). Uses a callable for
 the DeepSeek API key so we preserve the per-call cfg() re-evaluation
@@ -25,6 +24,7 @@ behaviour the inline version had.
 """
 from __future__ import annotations
 import json
+import os
 import secrets
 import time
 from urllib.error import HTTPError
@@ -38,6 +38,9 @@ GLOBUS_VOICE_LLM_TIMEOUT = 30          # claude CLI per-turn cap (sec)
 # Module state set via configure().
 _DEEPSEEK_API_KEY_GETTER = lambda: ""  # callable; preserves per-call refresh
 _DEFAULT_MODEL = "claude-sonnet-4-6"
+# DeepSeek backup model — v4-flash (deepseek-chat retires 2026-07-24). V4 is
+# reasoning-only; the calls below fold reasoning_content into the reply.
+DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash")
 
 
 def configure(*, deepseek_api_key_getter, default_model,
@@ -71,7 +74,7 @@ def deepseek_voice_stream(persona, chat_msgs, max_tokens):
     if not api_key:
         raise RuntimeError("DEEPSEEK_API_KEY not set")
     payload = {
-        "model": "deepseek-chat",
+        "model": DEEPSEEK_MODEL,
         "messages": [{"role": "system", "content": persona}] + chat_msgs,
         "max_tokens": max_tokens,
         "temperature": 0.4,
@@ -98,7 +101,10 @@ def deepseek_voice_stream(persona, chat_msgs, max_tokens):
         except Exception:
             continue
         choice = (evt.get("choices") or [{}])[0]
-        delta = (choice.get("delta") or {}).get("content") or ""
+        d = choice.get("delta") or {}
+        # V4 streams the answer as reasoning_content; fall back to it so the
+        # backup still yields text after deepseek-chat retires 2026-07-24.
+        delta = d.get("content") or d.get("reasoning_content") or ""
         finish = choice.get("finish_reason")
         if delta or finish:
             yield delta, finish
@@ -115,7 +121,7 @@ def deepseek_voice_call(persona, chat_msgs, max_tokens):
     if not api_key:
         return None, "DEEPSEEK_API_KEY not set"
     payload = {
-        "model": "deepseek-chat",
+        "model": DEEPSEEK_MODEL,
         "messages": [{"role": "system", "content": persona}] + chat_msgs,
         "max_tokens": max_tokens,
         "temperature": 0.4,
@@ -130,7 +136,9 @@ def deepseek_voice_call(persona, chat_msgs, max_tokens):
     try:
         with urlopen(req, timeout=GLOBUS_VOICE_LLM_TIMEOUT) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-        reply = (data["choices"][0]["message"]["content"] or "").strip()
+        m = (data.get("choices") or [{}])[0].get("message", {}) or {}
+        # V4 is reasoning-only: answer in reasoning_content, content empty.
+        reply = (m.get("content") or m.get("reasoning_content") or "").strip()
         u = data.get("usage", {}) or {}
         return reply, {
             "input_tokens":  int(u.get("prompt_tokens", 0) or 0),
