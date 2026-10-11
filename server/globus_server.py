@@ -210,6 +210,8 @@ from agent_runner import (  # noqa: E402
 from agents_dashboard_html import agents_dashboard_html  # noqa: E402
 from telegram_bot_setup_html import telegram_bot_setup_html  # noqa: E402
 from public_chat import public_chat_send, is_enabled as _public_enabled  # noqa: E402
+import globus_relay  # noqa: E402
+from telegram_bot import send_via_member_bot  # noqa: E402
 
 # Narada (outbound agent) imports — kept after narada_plugins.load_all_plugins()
 # above so the registry is populated before any route handler runs.
@@ -1391,6 +1393,17 @@ class Handler(BaseHTTPRequestHandler):
             result = public_chat_send(client_ip, ua, msg)
             return self._send_json(200 if result.get("ok") else 429,
                                     result)
+
+        # ---- Notification relay: any service -> the member's Telegram bot ----
+        # Relay-key auth (`Authorization: Bearer <key>` or `X-Relay-Key`), NOT a
+        # cookie. No keys exist until an operator mints one with
+        # scripts/relay_key.py, so a fresh install answers 401. The whole
+        # contract lives in globus_relay.handle_notify; the bot's
+        # allowed_send_chats still default-denies the target chat.
+        if route == "/api/notify":
+            code, body = globus_relay.handle_notify(
+                self.headers, self._json(), send_via_member_bot)
+            return self._send_json(code, body)
 
         # ---- Bridge ingest (extension-token auth, NOT cookie) ----
         # WhatsApp Web + Teams personal — same Chrome extension, two
