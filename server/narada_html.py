@@ -292,19 +292,49 @@ def narada_credentials_html(email, configured_tools,
 
 def narada_new_campaign_html(email, message=None, kind=None,
                                send_from_accounts=None):
-    senders = list_available_for_member(PluginCategory.SENDER, email)
-    sources = list_available_for_member(PluginCategory.LEAD_SOURCE, email)
-    verifiers = list_available_for_member(PluginCategory.VERIFIER, email)
-    crms = list_available_for_member(PluginCategory.CRM, email)
+    # Show ALL registered plugins in each dropdown — even ones the member
+    # hasn't set up credentials for. Available (credential-configured)
+    # plugins render normally; unavailable ones append "(coming soon —
+    # add credentials)" and are `disabled` so the form can't submit with
+    # them. This lets marketers see the full breadth of the platform on
+    # first visit instead of an empty dropdown.
+    available_sender_slugs = {p.info().name for p in
+        list_available_for_member(PluginCategory.SENDER, email)}
+    available_source_slugs = {p.info().name for p in
+        list_available_for_member(PluginCategory.LEAD_SOURCE, email)}
+    available_verifier_slugs = {p.info().name for p in
+        list_available_for_member(PluginCategory.VERIFIER, email)}
+    available_crm_slugs = {p.info().name for p in
+        list_available_for_member(PluginCategory.CRM, email)}
 
-    def _select(name, plugins, required=True, default_first=False):
+    def _plugins_for(cat):
+        return [p for p in list_plugins() if p.info().category == cat]
+
+    senders = _plugins_for(PluginCategory.SENDER)
+    sources = _plugins_for(PluginCategory.LEAD_SOURCE)
+    verifiers = _plugins_for(PluginCategory.VERIFIER)
+    crms = _plugins_for(PluginCategory.CRM)
+
+    def _select(name, plugins, available_slugs, required=True,
+                default_first=False):
         opts = ['<option value="">— none —</option>']
-        for i, p in enumerate(plugins):
+        # Live plugins first; coming-soon after, disabled
+        live = [p for p in plugins if p.info().name in available_slugs]
+        pending = [p for p in plugins if p.info().name not in available_slugs]
+        for i, p in enumerate(live):
             info = p.info()
             selected = " selected" if (default_first and i == 0) else ""
             opts.append(
                 f'<option value="{esc(info.name)}"{selected}>'
                 f'{esc(info.display_name)}</option>')
+        if pending:
+            opts.append('<option disabled>── coming soon ──</option>')
+            for p in pending:
+                info = p.info()
+                opts.append(
+                    f'<option value="{esc(info.name)}" disabled>'
+                    f'{esc(info.display_name)} '
+                    f'(needs credentials)</option>')
         req = "required" if required else ""
         return (f'<select name="{esc(name)}" {req} '
                 f'style="width:100%;padding:.5rem;border:1px solid var(--line);'
@@ -350,16 +380,20 @@ def narada_new_campaign_html(email, message=None, kind=None,
         'gap:1rem;margin-bottom:1rem">'
         '<label><span style="display:block;font-weight:600;margin-bottom:.3rem">'
         'Lead source</span>'
-        f'{_select("lead_source", sources, default_first=True)}</label>'
+        + _select("lead_source", sources, available_source_slugs,
+                  default_first=True) + '</label>'
         '<label><span style="display:block;font-weight:600;margin-bottom:.3rem">'
         'Verifier <span class="muted small">(optional)</span></span>'
-        f'{_select("verifier", verifiers, required=False)}</label>'
+        + _select("verifier", verifiers, available_verifier_slugs,
+                  required=False) + '</label>'
         '<label><span style="display:block;font-weight:600;margin-bottom:.3rem">'
         'Sender</span>'
-        f'{_select("sender", senders, default_first=True)}</label>'
+        + _select("sender", senders, available_sender_slugs,
+                  default_first=True) + '</label>'
         '<label><span style="display:block;font-weight:600;margin-bottom:.3rem">'
         'CRM <span class="muted small">(optional)</span></span>'
-        f'{_select("crm", crms, required=False)}</label>'
+        + _select("crm", crms, available_crm_slugs,
+                  required=False) + '</label>'
         '</div>'
 
         '<label style="display:block;margin-bottom:1rem">'
@@ -504,10 +538,6 @@ def narada_campaign_detail_html(email, campaign, prospects, stats,
             '<span class="stat-chip stat-empty">no sends yet</span>')
         + '</div></div>'
         '<div class="panel">'
-        '<h3 style="margin-top:0">Actions</h3>'
-        + "".join(actions) +
-        '</div>'
-        '<div class="panel">'
         '<h3 style="margin-top:0">Add leads <span class="muted small">'
         '(paste your own)</span></h3>'
         '<p class="muted small" style="margin-top:-.4rem">One per line &mdash; '
@@ -523,6 +553,10 @@ def narada_campaign_detail_html(email, campaign, prospects, stats,
         'font-size:.85rem"></textarea>'
         '<button type="submit" class="btn btn-primary" '
         'style="margin-top:.5rem">Import leads</button></form>'
+        '</div>'
+        '<div class="panel">'
+        '<h3 style="margin-top:0">Actions</h3>'
+        + "".join(actions) +
         '</div>'
         '<h2 style="margin-top:1.5rem">Prospects '
         f'<span class="muted small">({len(prospects)} shown)</span></h2>'

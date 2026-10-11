@@ -14,8 +14,39 @@ Same Fernet key as Google OAuth refresh tokens
 from __future__ import annotations
 import json
 
-from db_helpers import db_read, db_write
+from db_helpers import db_read, db_write, cfg
 from oauth_db import encrypt_token, decrypt_token
+
+
+def _shared_credential(tool: str) -> dict | None:
+    """Company-wide fallback key deployed server-side.
+
+    When an operator deploys an API key for a tool in the `config`
+    table (or as an env var) named NARADA_<TOOL>_API_KEY or
+    <TOOL>_API_KEY, that tool becomes available to EVERY member with
+    no per-member paste — the campaign builder shows it as live (not
+    'coming soon') and plugin calls use the shared key. This is how a
+    Globus admin turns a lead source on for the whole install (e.g. a
+    company Cognism / ZoomInfo seat) instead of asking each marketer
+    for their own key.
+
+    Per-member vault keys always win over this (see get_credential);
+    the shared key is consulted only when the member has none. Single
+    `api_key` credentials only — multi-field tools (Salesforce etc.)
+    still require the per-member vault.
+
+    Note: config-table values are cached at server start, so a newly
+    added row takes effect on next restart (same as every other cfg()
+    key); env vars are likewise read at process start.
+    """
+    slug = (tool or "").strip().upper().replace("-", "_").replace(".", "_")
+    if not slug:
+        return None
+    for name in (f"NARADA_{slug}_API_KEY", f"{slug}_API_KEY"):
+        val = (cfg(name) or "").strip()
+        if val:
+            return {"api_key": val}
+    return None
 
 
 def set_credential(member_email: str, tool: str,
@@ -59,18 +90,18 @@ def get_credential(member_email: str, tool: str) -> dict | None:
         "SELECT credential_enc, status FROM globus_narada_credentials "
         "WHERE member_email=%s AND tool=%s",
         (member_email, tool))
-    if not rows or rows[0].get("status") != "active":
-        return None
-    enc = rows[0]["credential_enc"]
-    if enc is None:
-        return None
-    try:
-        plain = decrypt_token(enc)
-        return json.loads(plain) if plain else None
-    except Exception as e:
-        print(f"[narada-creds] decrypt failed for {member_email}/{tool}: "
-              f"{type(e).__name__}: {e}", flush=True)
-        return None
+    if rows and rows[0].get("status") == "active" \
+            and rows[0]["credential_enc"] is not None:
+        try:
+            plain = decrypt_token(rows[0]["credential_enc"])
+            if plain:
+                return json.loads(plain)
+        except Exception as e:
+            print(f"[narada-creds] decrypt failed for {member_email}/{tool}: "
+                  f"{type(e).__name__}: {e}", flush=True)
+    # No usable per-member key — fall back to a company-wide key
+    # deployed server-side (config table / env var), if any.
+    return _shared_credential(tool)
 
 
 def has_credential(member_email: str, tool: str) -> bool:
@@ -81,7 +112,10 @@ def has_credential(member_email: str, tool: str) -> bool:
         "SELECT 1 FROM globus_narada_credentials "
         "WHERE member_email=%s AND tool=%s AND status='active' LIMIT 1",
         (member_email, tool))
-    return bool(rows)
+    if rows:
+        return True
+    # Company-wide server-deployed key makes the tool live for everyone.
+    return _shared_credential(tool) is not None
 
 
 def list_member_credentials(member_email: str) -> list[dict]:
