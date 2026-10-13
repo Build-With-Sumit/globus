@@ -241,10 +241,43 @@ def drive_download_file(access_token, file_id):
         return r.read(GOOGLE_DRIVE_MAX_FILE_BYTES)
 
 
+# Filenames that signal a credential store are never extracted, whatever the
+# mime type, size or sharing settings say. This applies at ingest, so a
+# "creds.xlsx" added to Drive tomorrow is treated like the ones already there.
+# The match is case-insensitive over the raw filename.
+#
+# A word here is delimited by anything that is not a letter or digit. Python's
+#  does not do that: it counts "_" as a word character, so "prod_secrets"
+# and "my_password_file" would slip past it. "Passwordless" still does not match.
+_L = r"(?<![^\W_])"     # not preceded by a letter or digit
+_R = r"(?![^\W_])"      # not followed by a letter or digit
+_CREDENTIAL_TERMS = (
+    r"credentials?", r"creds?", r"passwords?", r"passwd", r"secrets?",
+    r"api[-_ ]?keys?", r"access[-_ ]?tokens?", r"private[-_ ]?keys?",
+    r"ssh[-_ ]?keys?", r"pem", r"env[-_ ]?file", r"vault[-_ ]?dump",
+    r"keystore", r"kubeconfig", r"phantom",
+    r"wallet(?:[-_ ]?(?:keys?|seed|phrase|backup|export))?",
+    r"seed[-_ ]?phrase", r"mnemonic",
+    r"solana(?:[-_ ]?(?:keys?|wallet|seed))?", r"metamask",
+    r"ledger[-_ ]?(?:backup|recovery|seed)", r"crypto[-_ ]?(?:keys?|wallet|backup)",
+)
+_CREDENTIAL_NAME_RE = re.compile(
+    r"(?i)" + _L + "(?:" + "|".join(_CREDENTIAL_TERMS) + ")" + _R
+    + r"|\.(?:pem|pkcs|p12|pfx|ppk|key|cer|crt|env)(?:$|\.)"
+)
+
+
+def _is_credential_filename(name):
+    """True if the filename hints at a credential store; the sync must skip it."""
+    return bool(_CREDENTIAL_NAME_RE.search(name or ""))
+
+
 def drive_classify(f):
     """Return (extract_method, output_ext, export_mime_or_None,
     skip_reason_or_None). extract_method is 'export'|'download'|None;
     skip_reason is set iff method is None."""
+    if _is_credential_filename(f.get("name")):
+        return None, None, None, "credential-filename-pattern"
     mime = (f.get("mimeType") or "").lower()
     try:
         size = int(f.get("size") or 0)
